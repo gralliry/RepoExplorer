@@ -1219,10 +1219,9 @@ function renderMyRepos() {
 
   // Group by where the repository comes from, so a repo you merely collaborate
   // on is never mistaken for one of your own. Each group can be folded away.
+  // Empty groups are still shown (with a 0) so the categories are always visible.
   for (const [key, label] of REPO_GROUPS) {
     const group = items.filter((r) => r.category === key);
-    if (!group.length) continue;
-
     const collapsed = collapsedGroups.has(key);
 
     const head = document.createElement('div');
