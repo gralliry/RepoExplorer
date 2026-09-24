@@ -111,11 +111,13 @@ func humanizeAPIError(code int, body string) string {
 	case 401:
 		hint = "认证失败，请检查 Token 是否正确"
 	case 403:
-		hint = "请求被拒绝，通常是速率限制，填写 Token 可提升配额"
+		hint = "请求被拒绝：可能是速率限制，或凭据没有写权限（需要带 repo 权限）"
 	case 404:
 		hint = "仓库或分支不存在（私有仓库需要填写 Token）"
+	case 409:
+		hint = "冲突：分支已被其他人更新，请重新加载后再试"
 	case 422:
-		hint = "分支名无法解析"
+		hint = "无法应用改动：分支名无效，或分支已被更新（不是快进），请重新加载后再试"
 	case 429:
 		hint = "请求过于频繁，请稍后再试"
 	}

@@ -1,9 +1,8 @@
-/* Frontend for the GitHub folder downloader (Wails / Go backend).
+/* Frontend for RepoDownloader (Wails / Go backend).
  *
- * The backend methods are exposed by Wails as window.go.main.App.<Method>(...)
- * and the runtime helpers live on window.runtime. Authentication (OAuth device
- * flow or a manual token) is handled entirely in Go and persisted to disk, so
- * the frontend only renders state and triggers actions.
+ * The Go side owns authentication (OAuth device flow or a manual token) and all
+ * writes; every write goes through the Git Data API so an operation like
+ * "rename a folder with 200 files" lands as ONE commit.
  */
 const api = () => window.go.main.App;
 const rt = () => window.runtime;
@@ -26,9 +25,11 @@ const logEl = $('log');
 const toastEl = $('toast');
 const authBtn = $('auth-btn');
 const authModal = $('auth-modal');
+const ctxMenu = $('ctx-menu');
 
 let info = null;                 // RepoTree returned by the backend
 let root = null;                 // nested tree built from info.files
+let dirPaths = new Set();        // every directory path in the tree
 const sizes = new Map();         // file path -> size
 const selected = new Set();      // selected file paths
 const expanded = new Set();      // expanded directory paths
@@ -36,7 +37,7 @@ let dest = '';
 let busy = false;
 let metaText = '';
 let auth = { loggedIn: false, login: '', source: '' };
-let deviceFlow = null;           // last github-login-code payload
+let deviceFlow = null;
 
 /* ------------------------------------------------------------------ utils */
 function errText(err) {
@@ -55,12 +56,26 @@ function fmtSize(n) {
   return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
+function basename(p) {
+  const i = p.lastIndexOf('/');
+  return i >= 0 ? p.slice(i + 1) : p;
+}
+
+function dirname(p) {
+  const i = p.lastIndexOf('/');
+  return i >= 0 ? p.slice(0, i) : '';
+}
+
+const joinPath = (dir, name) => (dir ? `${dir}/${name}` : name);
+
+const repoId = () => (info ? `${info.owner}/${info.repo}` : '');
+
 let toastTimer = null;
 function toast(msg, isError = false) {
   toastEl.textContent = msg;
   toastEl.className = 'toast show' + (isError ? ' err' : '');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toastEl.className = 'toast'; }, 3200);
+  toastTimer = setTimeout(() => { toastEl.className = 'toast'; }, 3600);
 }
 
 function appendLog(text) {
@@ -87,6 +102,183 @@ function copyText(text) {
     document.body.removeChild(ta);
     ok ? resolve() : reject(new Error('复制失败'));
   });
+}
+
+/* ------------------------------------------------------------ generic UI */
+function openModal(id) { $(id).classList.remove('hidden'); }
+function closeModal(id) { $(id).classList.add('hidden'); }
+
+// promptModal resolves with the entered string, or null when cancelled. When
+// `extra` is given it resolves with {value, extra}.
+function promptModal({ title, label, hint = '', value = '', placeholder = '', extra = null, okText = '确定' }) {
+  return new Promise((resolve) => {
+    $('prompt-title').textContent = title;
+    $('prompt-label').textContent = label;
+    $('prompt-hint').textContent = hint;
+    $('prompt-hint').classList.toggle('hidden', !hint);
+    $('prompt-ok').textContent = okText;
+
+    const input = $('prompt-input');
+    input.value = value;
+    input.placeholder = placeholder;
+
+    const wrap = $('prompt-extra-wrap');
+    const extraEl = $('prompt-extra');
+    if (extra) {
+      wrap.classList.remove('hidden');
+      $('prompt-extra-label').textContent = extra.label;
+      extraEl.value = extra.value || '';
+    } else {
+      wrap.classList.add('hidden');
+      extraEl.value = '';
+    }
+
+    const finish = (result) => {
+      closeModal('prompt-modal');
+      $('prompt-ok').onclick = null;
+      $('prompt-cancel').onclick = null;
+      $('prompt-close').onclick = null;
+      input.onkeydown = null;
+      resolve(result);
+    };
+
+    $('prompt-ok').onclick = () => {
+      const v = input.value.trim();
+      if (!v) return toast('不能为空', true);
+      finish(extra ? { value: v, extra: extraEl.value } : v);
+    };
+    $('prompt-cancel').onclick = () => finish(null);
+    $('prompt-close').onclick = () => finish(null);
+    input.onkeydown = (e) => { if (e.key === 'Enter') $('prompt-ok').click(); };
+
+    openModal('prompt-modal');
+    input.focus();
+    input.select();
+  });
+}
+
+function confirmModal({ title, message, items = [], okText = '确认' }) {
+  return new Promise((resolve) => {
+    $('confirm-title').textContent = title;
+    $('confirm-message').textContent = message;
+    $('confirm-ok').textContent = okText;
+
+    const list = $('confirm-list');
+    list.innerHTML = '';
+    list.classList.toggle('hidden', items.length === 0);
+    const MAX = 300;
+    for (const item of items.slice(0, MAX)) {
+      const div = document.createElement('div');
+      if (item.cls) div.className = item.cls;
+      div.textContent = item.text;
+      div.title = item.text;
+      list.appendChild(div);
+    }
+    if (items.length > MAX) {
+      const more = document.createElement('div');
+      more.className = 'more';
+      more.textContent = `… 还有 ${items.length - MAX} 项`;
+      list.appendChild(more);
+    }
+
+    const finish = (ok) => {
+      closeModal('confirm-modal');
+      $('confirm-ok').onclick = null;
+      $('confirm-cancel').onclick = null;
+      $('confirm-close').onclick = null;
+      resolve(ok);
+    };
+    $('confirm-ok').onclick = () => finish(true);
+    $('confirm-cancel').onclick = () => finish(false);
+    $('confirm-close').onclick = () => finish(false);
+
+    openModal('confirm-modal');
+  });
+}
+
+function editorModal({ title, content, hint = '' }) {
+  return new Promise((resolve) => {
+    $('editor-title').textContent = title;
+    $('editor-hint').textContent = hint;
+    const area = $('editor-text');
+    area.value = content;
+
+    const finish = (value) => {
+      closeModal('editor-modal');
+      $('editor-save').onclick = null;
+      $('editor-cancel').onclick = null;
+      $('editor-close').onclick = null;
+      resolve(value);
+    };
+    $('editor-save').onclick = () => finish(area.value);
+    $('editor-cancel').onclick = () => finish(null);
+    $('editor-close').onclick = () => finish(null);
+
+    openModal('editor-modal');
+    area.focus();
+  });
+}
+
+/* --------------------------------------------------------- context menu */
+function hideCtxMenu() { ctxMenu.classList.add('hidden'); }
+
+function showCtxMenu(x, y, items) {
+  ctxMenu.innerHTML = '';
+  for (const item of items) {
+    if (item === '-') {
+      const sep = document.createElement('div');
+      sep.className = 'ctx-sep';
+      ctxMenu.appendChild(sep);
+      continue;
+    }
+    const el = document.createElement('div');
+    el.className = 'ctx-item' + (item.danger ? ' danger' : '');
+    el.textContent = item.label;
+    el.onclick = () => { hideCtxMenu(); item.run(); };
+    ctxMenu.appendChild(el);
+  }
+  ctxMenu.classList.remove('hidden');
+
+  const rect = ctxMenu.getBoundingClientRect();
+  ctxMenu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+  ctxMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+}
+
+function openContextMenu(event, node) {
+  const items = [];
+
+  if (!node) {
+    items.push(
+      { label: '新建文件…', run: () => promptNewFile('') },
+      { label: '新建文件夹…', run: () => promptNewFolder('') },
+      { label: '上传文件到根目录…', run: () => uploadInto('', 'files') },
+      { label: '上传文件夹到根目录…', run: () => uploadInto('', 'folder') },
+    );
+  } else if (node.dir) {
+    items.push(
+      { label: '在此新建文件…', run: () => promptNewFile(node.path) },
+      { label: '在此新建文件夹…', run: () => promptNewFolder(node.path) },
+      { label: '上传到此…', run: () => uploadInto(node.path, 'files') },
+      { label: '上传文件夹到此…', run: () => uploadInto(node.path, 'folder') },
+      '-',
+      { label: '重命名…', run: () => promptRename(node) },
+      { label: '移动到…', run: () => promptMove(node) },
+      { label: '删除', danger: true, run: () => confirmDelete([node]) },
+      '-',
+      { label: '下载此文件夹', run: () => selectAndDownload(node) },
+    );
+  } else {
+    items.push(
+      { label: '编辑', run: () => openEditor(node) },
+      { label: '下载', run: () => selectAndDownload(node) },
+      '-',
+      { label: '重命名…', run: () => promptRename(node) },
+      { label: '移动到…', run: () => promptMove(node) },
+      { label: '删除', danger: true, run: () => confirmDelete([node]) },
+    );
+  }
+
+  showCtxMenu(event.clientX, event.clientY, items);
 }
 
 /* ------------------------------------------------------------------- auth */
@@ -118,7 +310,6 @@ function showAuthView(name) {
 
 function openAuthModal() {
   authModal.classList.remove('hidden');
-
   if (auth.loggedIn) {
     $('auth-user-name').textContent =
       auth.source === 'oauth' ? `@${auth.login || '(未知用户)'}` : '手动 Token';
@@ -132,23 +323,28 @@ function openAuthModal() {
   }
 }
 
-function closeAuthModal() {
-  authModal.classList.add('hidden');
-}
+function closeAuthModal() { authModal.classList.add('hidden'); }
 
 function openExternal(url) {
   if (!url) return;
   api().OpenExternal(url).catch((err) => toast(errText(err), true));
 }
 
+function requireLogin() {
+  if (auth.loggedIn) return true;
+  toast('这个操作需要先登录 GitHub', true);
+  openAuthModal();
+  return false;
+}
+
 /* ------------------------------------------------------------- tree model */
 const mkNode = (name, path, dir) => ({ name, path, dir, children: new Map(), size: 0, count: 0 });
 
 function buildTree(files) {
-  const root = mkNode('', '', true);
+  const rootNode = mkNode('', '', true);
   for (const file of files) {
     const parts = file.path.split('/');
-    let node = root;
+    let node = rootNode;
     let acc = '';
     parts.forEach((part, idx) => {
       acc = acc ? `${acc}/${part}` : part;
@@ -163,8 +359,8 @@ function buildTree(files) {
     node.size = file.size;
     sizes.set(file.path, file.size);
   }
-  compute(root);
-  return root;
+  compute(rootNode);
+  return rootNode;
 }
 
 function compute(node) {
@@ -188,10 +384,31 @@ function collectFiles(node, out) {
   for (const child of node.children.values()) collectFiles(child, out);
 }
 
+function collectDirPaths(node, out) {
+  for (const child of node.children.values()) {
+    if (child.dir) { out.push(child.path); collectDirPaths(child, out); }
+  }
+  return out;
+}
+
+function expandToFiles(nodes) {
+  const set = new Set();
+  for (const node of nodes) {
+    if (node.dir) {
+      const out = [];
+      collectFiles(node, out);
+      out.forEach((f) => set.add(f));
+    } else {
+      set.add(node.path);
+    }
+  }
+  return [...set];
+}
+
 /* -------------------------------------------------------------- rendering */
 function render() {
   if (!root) {
-    treeEl.innerHTML = '<div class="empty">输入仓库后点击“加载目录”</div>';
+    treeEl.innerHTML = '<div class="empty">输入仓库后点击“加载目录”<br />右键文件或文件夹可以进行增删改</div>';
     return;
   }
   const q = filterEl.value.trim().toLowerCase();
@@ -216,6 +433,7 @@ function buildRow(node, depth) {
   const row = document.createElement('div');
   row.className = 'row ' + (node.dir ? 'dir' : 'file');
   row.style.paddingLeft = `${10 + depth * 15}px`;
+  row.__node = node;
 
   const cb = document.createElement('input');
   cb.type = 'checkbox';
@@ -257,6 +475,7 @@ function buildRow(node, depth) {
       else selected.delete(node.path);
       refresh();
     };
+    row.ondblclick = () => openEditor(node);
   }
 
   row.append(cb, twisty, icon, name, size);
@@ -274,6 +493,7 @@ function renderFiltered(q) {
     const row = document.createElement('div');
     row.className = 'row file';
     row.style.paddingLeft = '10px';
+    row.__node = { name: basename(f.path), path: f.path, dir: false };
 
     const cb = document.createElement('input');
     cb.type = 'checkbox';
@@ -303,9 +523,7 @@ function renderFiltered(q) {
 }
 
 function updateFilterCount(n) {
-  if (filterEl.value.trim()) {
-    repoMetaEl.textContent = `筛选出 ${n} 个文件`;
-  }
+  if (filterEl.value.trim()) repoMetaEl.textContent = `筛选出 ${n} 个文件`;
 }
 
 function toggleExpand(node) {
@@ -334,7 +552,15 @@ function updateStats() {
   statSizeEl.textContent = fmtSize(size);
 }
 
-/* ---------------------------------------------------------------- actions */
+function updateMeta() {
+  const totalSize = info.files.reduce((a, b) => a + b.size, 0);
+  metaText =
+    `${info.owner}/${info.repo} @ ${info.git_ref} · ${info.files.length} 个文件 · ${fmtSize(totalSize)}` +
+    (info.truncated ? ' · ⚠ 目录过大，结果被 GitHub 截断' : '');
+  repoMetaEl.textContent = metaText;
+}
+
+/* --------------------------------------------------------------- loading */
 async function load() {
   const repo = repoEl.value.trim();
   if (!repo) return toast('请输入仓库地址', true);
@@ -358,14 +584,10 @@ async function load() {
     selected.clear();
     expanded.clear();
     root = buildTree(tree.files);
+    dirPaths = new Set(collectDirPaths(root, []));
     for (const child of root.children.values()) if (child.dir) expanded.add(child.path);
 
-    const totalSize = tree.files.reduce((a, b) => a + b.size, 0);
-    metaText =
-      `${tree.owner}/${tree.repo} @ ${tree.git_ref} · ${tree.files.length} 个文件 · ${fmtSize(totalSize)}` +
-      (tree.truncated ? ' · ⚠ 目录过大，结果被 GitHub 截断' : '');
-    repoMetaEl.textContent = metaText;
-
+    updateMeta();
     refresh();
     toast(`已加载 ${tree.files.length} 个文件`);
   } catch (err) {
@@ -375,6 +597,47 @@ async function load() {
   }
 }
 
+// Re-fetch the tree, keeping the expanded folders and the current selection.
+async function refreshTree() {
+  if (!info) return;
+  const keepExpanded = [...expanded];
+  const keepSelected = [...selected];
+
+  const tree = await api().FetchRepoTree(repoId(), info.git_ref);
+  info = tree;
+
+  sizes.clear();
+  selected.clear();
+  expanded.clear();
+  root = buildTree(tree.files);
+  dirPaths = new Set(collectDirPaths(root, []));
+
+  for (const p of keepExpanded) if (dirPaths.has(p)) expanded.add(p);
+  for (const p of keepSelected) if (sizes.has(p)) selected.add(p);
+
+  updateMeta();
+  refresh();
+}
+
+// runMutation wraps a write: it guards on auth, shows progress, refreshes the
+// tree afterwards and reports the commit message.
+async function runMutation(label, fn) {
+  if (!info) return toast('请先加载仓库', true);
+  if (!requireLogin()) return;
+
+  setBusy(true, label);
+  try {
+    const result = await fn();
+    await refreshTree();
+    toast(`已提交：${result.message}`);
+  } catch (err) {
+    toast(errText(err), true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+/* -------------------------------------------------------------- downloads */
 async function pickFolder() {
   try {
     const picked = await api().PickFolder();
@@ -385,6 +648,14 @@ async function pickFolder() {
   } catch (err) {
     toast(errText(err), true);
   }
+}
+
+function selectAndDownload(node) {
+  const files = expandToFiles([node]);
+  selected.clear();
+  for (const f of files) selected.add(f);
+  refresh();
+  toast(`已勾选 ${files.length} 个文件，点右侧「下载选中」开始下载`);
 }
 
 async function download() {
@@ -404,12 +675,7 @@ async function download() {
   });
 
   try {
-    const res = await api().DownloadFiles(
-      `${info.owner}/${info.repo}`,
-      info.git_ref,
-      dest,
-      paths,
-    );
+    const res = await api().DownloadFiles(repoId(), info.git_ref, dest, paths);
     toast(`下载完成：成功 ${res.downloaded}，失败 ${res.failed}`, res.failed > 0);
     if (res.errors && res.errors.length) {
       appendLog('—— 失败明细 ——');
@@ -423,6 +689,182 @@ async function download() {
   }
 }
 
+/* -------------------------------------------------------------- mutations */
+function collectMoves(node, newPath) {
+  if (!node.dir) return [{ from: node.path, to: newPath }];
+  const files = [];
+  collectFiles(node, files);
+  const prefix = `${node.path}/`;
+  return files.map((f) => ({ from: f, to: `${newPath}/${f.slice(prefix.length)}` }));
+}
+
+async function confirmAndMove(moves, title) {
+  const ok = await confirmModal({
+    title,
+    message: `将在当前分支上产生 1 个提交，涉及 ${moves.length} 个文件：`,
+    items: moves.map((m) => ({ text: `${m.from}  →  ${m.to}` })),
+    okText: '确认移动',
+  });
+  if (!ok) return;
+  await runMutation('正在提交…', () => api().MovePaths(repoId(), info.git_ref, moves, ''));
+}
+
+async function confirmDeleteFiles(files) {
+  if (!files.length) return toast('没有可删除的文件', true);
+  const ok = await confirmModal({
+    title: '删除',
+    message: `将从当前分支删除 ${files.length} 个文件（之后可以在 git 历史里找回）：`,
+    items: files.map((f) => ({ text: f, cls: 'del' })),
+    okText: '确认删除',
+  });
+  if (!ok) return;
+  await runMutation('正在删除…', () => api().DeletePaths(repoId(), info.git_ref, files, ''));
+}
+
+const confirmDelete = (nodes) => confirmDeleteFiles(expandToFiles(nodes));
+
+async function promptNewFile(dir) {
+  const answer = await promptModal({
+    title: '新建文件',
+    label: '文件路径',
+    hint: dir ? `将创建在 ${dir}/` : '将创建在仓库根目录',
+    value: dir ? `${dir}/` : '',
+    extra: { label: '文件内容（可留空）', value: '' },
+    okText: '创建',
+  });
+  if (!answer) return;
+
+  const target = answer.value.replace(/^\/+/, '');
+  if (!target) return toast('路径不能为空', true);
+  await runMutation('正在创建…', () => api().SaveFile(repoId(), info.git_ref, target, answer.extra, ''));
+}
+
+async function promptNewFolder(dir) {
+  const folder = await promptModal({
+    title: '新建文件夹',
+    label: '文件夹路径',
+    hint: 'Git 无法保存空文件夹，所以需要同时创建里面的第一个文件。',
+    value: dir ? `${dir}/` : '',
+    okText: '下一步',
+  });
+  if (!folder) return;
+  const folderPath = folder.replace(/^\/+|\/+$/g, '');
+  if (!folderPath) return toast('路径不能为空', true);
+
+  const file = await promptModal({
+    title: '第一个文件',
+    label: '文件名',
+    hint: `将创建在 ${folderPath}/`,
+    extra: { label: '文件内容（可留空）', value: '' },
+    okText: '创建',
+  });
+  if (!file) return;
+  if (file.value.includes('/')) return toast('文件名不能包含 /', true);
+
+  const target = `${folderPath}/${file.value}`;
+  await runMutation('正在创建…', () => api().SaveFile(repoId(), info.git_ref, target, file.extra, ''));
+}
+
+async function promptRename(node) {
+  const name = await promptModal({
+    title: '重命名',
+    label: '新名称',
+    hint: node.path,
+    value: node.name,
+    okText: '下一步',
+  });
+  if (!name || name === node.name) return;
+  if (name.includes('/')) return toast('名称不能包含 /，要换目录请用「移动到」', true);
+
+  const newPath = joinPath(dirname(node.path), name);
+  await confirmAndMove(collectMoves(node, newPath), `重命名「${node.name}」`);
+}
+
+async function promptMove(node) {
+  const answer = await promptModal({
+    title: '移动到',
+    label: '目标目录',
+    hint: '留空表示仓库根目录',
+    value: dirname(node.path),
+    okText: '下一步',
+  });
+  if (answer === null) return;
+
+  const dir = answer.replace(/^\/+|\/+$/g, '');
+  const newPath = joinPath(dir, node.name);
+  if (newPath === node.path) return toast('目标路径没有变化');
+  await confirmAndMove(collectMoves(node, newPath), `移动「${node.path}」`);
+}
+
+async function uploadInto(dir, kind) {
+  if (!requireLogin()) return;
+
+  let picked = [];
+  try {
+    if (kind === 'folder') {
+      const folder = await api().PickUploadFolder();
+      picked = folder ? [folder] : [];
+    } else {
+      picked = await api().PickUploadFiles() || [];
+    }
+  } catch (err) {
+    return toast(errText(err), true);
+  }
+  if (!picked.length) return;
+
+  let items;
+  try {
+    items = await api().PlanUpload(dir, picked);
+  } catch (err) {
+    return toast(errText(err), true);
+  }
+
+  const ok = await confirmModal({
+    title: '上传',
+    message: `将向 ${dir || '仓库根目录'} 上传 ${items.length} 个文件（1 个提交）：`,
+    items: items.map((it) => ({ text: `${it.path}   ${fmtSize(it.size)}`, cls: 'add' })),
+    okText: '确认上传',
+  });
+  if (!ok) return;
+
+  await runMutation('正在上传…', () => api().UploadFiles(repoId(), info.git_ref, dir, picked, ''));
+}
+
+async function openEditor(node) {
+  if (!info) return;
+  if (!requireLogin()) return;
+
+  // Read first, and release the busy state before opening the editor — otherwise
+  // the global "busy" rule would block the editor's own buttons.
+  let file;
+  setBusy(true, '正在读取…');
+  try {
+    file = await api().ReadFile(repoId(), info.git_ref, node.path);
+  } catch (err) {
+    toast(errText(err), true);
+    return;
+  } finally {
+    setBusy(false);
+  }
+
+  if (file.tooLarge) {
+    return toast(`文件太大（${fmtSize(file.size)}），请用右键「下载」`, true);
+  }
+  if (file.binary) {
+    return toast('这是二进制文件，编辑器打不开，请用右键「下载」', true);
+  }
+
+  const content = await editorModal({
+    title: node.path,
+    content: file.content,
+    hint: '保存会在当前分支上创建一个提交。',
+  });
+  if (content === null || content === file.content) return;
+
+  await runMutation('正在提交…', () => api().SaveFile(repoId(), info.git_ref, node.path, content, ''));
+}
+
+/* ------------------------------------------------------------------ chrome */
 function setProgress(done, total) {
   const pct = total ? Math.round((done / total) * 100) : 0;
   barEl.style.width = `${pct}%`;
@@ -431,11 +873,9 @@ function setProgress(done, total) {
 
 function setBusy(value, label) {
   busy = value;
-  loadBtn.disabled = value;
-  downloadBtn.disabled = value;
-  pickBtn.disabled = value;
+  document.body.classList.toggle('busy', value);
   loadBtn.textContent = value ? (label || '处理中…') : '加载目录';
-  downloadBtn.textContent = value ? '处理中…' : '开始下载';
+  downloadBtn.textContent = value ? '处理中…' : '下载选中';
 }
 
 /* ------------------------------------------------------------------ wiring */
@@ -443,14 +883,20 @@ loadBtn.onclick = load;
 pickBtn.onclick = pickFolder;
 downloadBtn.onclick = download;
 
-repoEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); });
-refEl.addEventListener('change', () => { if (info) load(); });
+repoEl.onkeydown = (e) => { if (e.key === 'Enter') load(); };
+refEl.onchange = () => { if (info) load(); };
 
 let filterTimer = null;
-filterEl.addEventListener('input', () => {
+filterEl.oninput = () => {
   clearTimeout(filterTimer);
   filterTimer = setTimeout(render, 150);
-});
+};
+
+$('refresh').onclick = () => {
+  if (!info) return toast('请先加载仓库', true);
+  setBusy(true, '正在刷新…');
+  refreshTree().then(() => toast('已刷新')).catch((err) => toast(errText(err), true)).finally(() => setBusy(false));
+};
 
 $('select-all').onclick = () => {
   if (!info) return;
@@ -462,6 +908,49 @@ $('clear-all').onclick = () => {
   selected.clear();
   refresh();
 };
+
+$('delete-selected').onclick = () => {
+  if (!selected.size) return toast('请先勾选要删除的文件', true);
+  confirmDeleteFiles([...selected]);
+};
+
+$('move-selected').onclick = async () => {
+  const files = [...selected];
+  if (!files.length) return toast('请先勾选要移动的文件', true);
+  const answer = await promptModal({
+    title: '移动选中',
+    label: '目标目录',
+    hint: `将移动 ${files.length} 个文件，文件名保持不变。留空表示仓库根目录。`,
+    value: '',
+    okText: '下一步',
+  });
+  if (answer === null) return;
+
+  const dir = answer.replace(/^\/+|\/+$/g, '');
+  const moves = files.map((f) => ({ from: f, to: joinPath(dir, basename(f)) }));
+  const changed = moves.filter((m) => m.from !== m.to);
+  if (!changed.length) return toast('目标路径没有变化');
+  await confirmAndMove(changed, '移动选中');
+};
+
+// Right click anywhere in the tree.
+treeEl.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  if (!root) return;
+  const row = e.target.closest ? e.target.closest('.row') : null;
+  openContextMenu(e, row && row.__node ? row.__node : null);
+});
+
+document.addEventListener('mousedown', (e) => {
+  if (!ctxMenu.contains(e.target)) hideCtxMenu();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  hideCtxMenu();
+  closeModal('prompt-modal');
+  closeModal('confirm-modal');
+});
+window.addEventListener('blur', hideCtxMenu);
 
 /* ------------------------------------------------------------- auth wiring */
 authBtn.onclick = openAuthModal;

@@ -363,3 +363,77 @@ main {
 
 .hidden { display: none !important; }
 
+/* ---------- modal variants ---------- */
+.modal.narrow { width: 380px; }
+.modal.wide-modal { width: 780px; max-width: calc(100vw - 40px); }
+
+.editor {
+  width: 100%;
+  min-height: 340px;
+  padding: 10px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  resize: vertical;
+}
+.editor.short { min-height: 92px; }
+.editor:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.change-list {
+  max-height: 240px;
+  overflow: auto;
+  padding: 6px 8px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  background: #fafbfc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.change-list div {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.change-list .add { color: var(--ok); }
+.change-list .del { color: var(--danger); }
+.change-list .more { color: var(--muted); }
+
+/* ---------- buttons ---------- */
+button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+button.danger:hover:not(:disabled) { background: #c92a2a; }
+.danger-text { color: var(--danger); }
+.danger-text:hover:not(:disabled) { background: #ffe8e8; border-color: var(--danger); }
+
+/* ---------- context menu ---------- */
+.ctx-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 168px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(16, 20, 28, 0.18);
+}
+.ctx-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ctx-item:hover { background: var(--accent-soft); }
+.ctx-item.danger { color: var(--danger); }
+.ctx-item.danger:hover { background: #ffe8e8; }
+.ctx-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+
+.row.dir.selected { background: var(--accent-soft); }
+
+/* While a network operation is running, block further clicks — but never the
+   buttons of an open dialog, so a dialog can always be dismissed. */
+body.busy button { opacity: .55; pointer-events: none; }
+body.busy .modal button { opacity: 1; pointer-events: auto; }
+
+

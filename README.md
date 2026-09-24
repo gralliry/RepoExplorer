@@ -1,9 +1,32 @@
 # RepoDownloader
 
-一个桌面小工具：输入 GitHub 仓库 → 自动拉取整棵目录树 → 只勾选你需要的文件/文件夹 → 下载到本地。
-专门用来解决「仓库太大、只想下载其中某个文件夹」的问题。
+把 GitHub 仓库当成一个可读写的文件夹来用的桌面工具：浏览目录树、下载、上传、新建、
+编辑、重命名、移动、删除，都在本地完成 —— 每次改动落到仓库上就是**一个提交**。
 
 技术栈：**Go + Wails v2**，前端是无构建的原生 HTML/CSS/JS。
+
+## 功能
+
+**读**
+
+- 输入 `owner/repo`、完整 GitHub 链接或 `git@github.com:owner/repo.git`
+- 自动获取默认分支与分支列表，可切换分支
+- 递归展示整棵目录树，文件夹可展开/折叠，每项都显示大小
+- 按路径筛选
+- 勾选文件或整个文件夹下载到本地，保留目录结构（8 并发、带进度条）
+- 支持私有仓库：OAuth 登录，或手动填 Token
+- 遵循 Windows 系统代理设置
+
+**写**（需要登录，**每次操作 = 一个提交**）
+
+- 新建文件 / 新建文件夹
+- 双击文本文件直接编辑，保存即提交
+- 上传本地文件或整个文件夹（递归，自动跳过 `.git`）
+- 重命名、移动到别的目录（支持整个文件夹）
+- 删除文件 / 文件夹
+- 破坏性操作前会列出**将受影响的所有文件**再确认
+- commit message 自动生成（`Add src/a.go`、`Rename docs to source`、`Delete 3 files`…）
+- 右键菜单是主要入口：在文件/文件夹上右键，或右键空白处在根目录操作
 
 ## 为什么用 Wails 而不是 Tauri
 
@@ -44,39 +67,81 @@ go test ./...                                    # 纯逻辑测试，不联网
 $env:LIVE_GITHUB=1; go test -run Live -v ./...   # 真实访问 GitHub API 的集成测试
 ```
 
-集成测试会真的去拉 `octocat/Hello-World` 的目录树、真的下载一个文件、
+只读集成测试会真的去拉 `octocat/Hello-World` 的目录树、真的下载一个文件，
 并验证下载不存在的文件会返回 404。
+
+写操作测试需要**一个可以随便改的仓库**，它们会真实地创建、重命名、移动、删除文件：
+
+```powershell
+gh repo create RepoDownloader-scratch --private --add-readme
+$env:GITHUB_TOKEN     = (gh auth token)
+$env:GITHUB_TEST_REPO = "you/RepoDownloader-scratch"
+go test -run LiveWrite -v ./...
+gh repo delete you/RepoDownloader-scratch --yes
+```
+
+覆盖的流程：新建 → 读回 → 更新 → 原地重命名 → 上传本地文件夹 → 移动整个文件夹
+→ 删除；并且断言「移动一个 2 文件的文件夹只产生 1 个提交」（原子性）。
+另外还验证了移动到已存在的路径会被拒绝、含 `..` 的路径会被拒绝、未登录时写操作会报错。
 
 ## 使用步骤
 
-0. （可选）点右上角「认证」登录 GitHub —— 访问私有仓库或提高 API 配额时才需要，
-   公开仓库不登录也能用。见下方「GitHub 认证」。
-1. 在「仓库」里填 `owner/repo`，例如 `tauri-apps/tauri`
-2. 点「加载目录」，稍等片刻会显示整棵目录树
-3. 勾选想要的文件或整个文件夹（勾文件夹会连带勾中里面所有文件）
-4. 点「选择…」挑一个本地目录，再点「开始下载」
+0. 点右上角「认证」登录 GitHub。**读公开仓库不需要登录，任何写操作都需要。**
+   见下方「GitHub 认证」。
+1. 在「仓库」里填 `owner/repo`，例如 `tauri-apps/tauri`，点「加载目录」
+2. 在目录树上**右键**文件或文件夹：新建 / 上传 / 重命名 / 移动 / 删除 / 编辑 / 下载
+3. 也可以勾选多个文件后用右侧的「下载选中」「移动选中」「删除选中」批量操作
+4. 双击文本文件即可编辑，保存会在当前分支上产生一个提交
 
 ## 项目结构
 
 ```
 RepoDownloader/
-├─ main.go            wails.Run 配置、嵌入 frontend/dist
-├─ app.go             App 结构体 + PickFolder（目录选择）
-├─ auth.go            GitHub 认证：OAuth Device Flow、凭据读写
-├─ github.go          GitHub API：解析仓库、分支、目录树
-├─ download.go        并发下载 + 进度事件
-├─ httpclient.go      HTTP 客户端（跟随系统代理）
-├─ proxy_windows.go   读注册表里的 WinINET 代理设置
-├─ proxy_other.go     其它平台的空实现
-├─ github_test.go     单元测试
-├─ auth_test.go       凭据读写测试
-├─ integration_test.go 真实网络集成测试（需 LIVE_GITHUB=1）
+├─ main.go             wails.Run 配置、嵌入 frontend/dist
+├─ app.go              App 结构体 + PickFolder（目录选择）
+├─ auth.go             GitHub 认证：OAuth Device Flow、凭据读写
+├─ github.go           GitHub API（读）：解析仓库、分支、目录树
+├─ gitdata.go          GitHub API（写）：blob / tree / commit / ref
+├─ mutate.go           写操作：新建、编辑、上传、重命名、移动、删除
+├─ download.go         并发下载 + 进度事件
+├─ httpclient.go       HTTP 客户端（跟随系统代理）
+├─ proxy_windows.go    读注册表里的 WinINET 代理设置
+├─ proxy_other.go      其它平台的空实现
+├─ github_test.go      仓库解析、路径转义等单元测试
+├─ mutate_test.go      路径校验、本地文件夹展开等单元测试
+├─ auth_test.go        凭据读写测试
+├─ integration_test.go 只读的真实网络集成测试（需 LIVE_GITHUB=1）
+├─ write_live_test.go  写操作的真实网络集成测试（需 GITHUB_TOKEN + GITHUB_TEST_REPO）
 ├─ wails.json
 ├─ frontend/
-│  ├─ dist/           index.html / styles.css / main.js —— 前端源码，直接嵌入
-│  └─ wailsjs/        Wails 自动生成的绑定（已 gitignore）
-└─ build/             appicon.png / windows/ / bin/（编译产物）
+│  ├─ dist/            index.html / styles.css / main.js —— 前端源码，直接嵌入
+│  └─ wailsjs/         Wails 自动生成的绑定（已 gitignore）
+└─ build/              appicon.png / windows/ / bin/（编译产物）
 ```
+
+## 写操作是怎么实现的
+
+没有用 Contents API，而是走 **Git Data API**，因为前者一次只能改一个文件：
+重命名一个 200 文件的文件夹会变成 200 次「新建 + 删除」、200 个提交，做到一半失败还会留下残局。
+
+现在的流程是：
+
+1. 读当前分支头 → commit sha → 根 tree sha（并列出全部文件及其 blob sha）
+2. 新内容 `POST /git/blobs`
+3. 用 `base_tree` 把改动叠加成新 tree：新增/修改给新 blob，删除给 `sha: null`，
+   **移动只是把新路径指向同一个 blob sha**，不重复上传内容
+4. `POST /git/commits`（父提交 = 第 1 步读到的头）
+5. `PATCH /git/refs/heads/{branch}` 把分支指过去
+
+所以不管一次操作涉及多少文件，**永远只产生一个提交**，要么全成功要么全不动。
+如果中途有人推了新提交，第 5 步会因为不是快进而被 GitHub 拒绝，程序会提示你重新加载。
+
+三个必须知道的限制：
+
+- **Git 存不了空文件夹**。所以「新建文件夹」会要求你顺手建里面的第一个文件。
+- **每次写操作就是一次真实提交**，直接落在你当前选中的分支上（不是 PR）。
+  删除之后只能去 git 历史里找回来。
+- 写操作会先列出受影响的文件让你确认，涉及几百个文件时列表会截断显示（只影响展示）。
 
 ## GitHub 认证
 
@@ -91,10 +156,11 @@ RepoDownloader/
 浏览器会自动打开授权页，把界面上显示的验证码填进去即可。
 申请的权限是 `repo`（能访问私有仓库）。
 
-想换成自己的 OAuth App 也可以（可选），两种覆盖方式：
+想换掉这个内置的 client_id，只能在构建时替换 —— 界面上**没有**让用户填写 client_id 的入口：
 
-- 运行时：在「认证」弹窗里填入自己的 Client ID 并保存
-- 构建时：`wails build -ldflags "-X main.defaultClientID=Ov23li..."`
+```powershell
+wails build -ldflags "-X main.defaultClientID=Ov23li..."
+```
 
 如果要自己注册一个（免费，两分钟）：
 
@@ -127,28 +193,44 @@ RepoDownloader/
 %APPDATA%\RepoDownloader\auth.json
 ```
 
-里面是明文（`clientId` / `token` / `login`），删掉这个文件就等于退出登录。
-点「退出 / 清除凭据」也会清掉 token（保留 client_id，省得重填）。
+里面是明文（`token` / `tokenSource` / `login`），删掉这个文件就等于退出登录。
+点「退出 / 清除凭据」也会清掉它。注入用的 client_id 是编译进程序的常量，不保存在这里。
 
 ## 前后端接口
 
 前端直接调用 Wails 注入的 `window.go.main.App.*`，不依赖生成的 ES module
 绑定文件，所以不需要任何打包器。
 
-| 前端调用 | Go 方法 |
+**读 / 下载**
+
+| 前端调用 | 作用 |
 |---|---|
 | `FetchRepoTree(repo, ref)` | 解析仓库并拉取整棵目录树 |
+| `ReadFile(repo, ref, path)` | 读取文本文件内容（编辑器用） |
 | `DownloadFiles(repo, ref, dest, paths)` | 并发下载选中的文件 |
-| `PickFolder()` | 打开系统「选择目录」对话框 |
+
+**写**（每个调用 = 一个提交）
+
+| 前端调用 | 作用 |
+|---|---|
+| `SaveFile(repo, ref, path, content, msg)` | 新建或覆盖一个文件 |
+| `DeletePaths(repo, ref, paths, msg)` | 删除若干文件 |
+| `MovePaths(repo, ref, moves, msg)` | 重命名 / 移动（`moves` 是 `{from,to}` 列表） |
+| `PlanUpload(dir, localPaths)` | 预览上传会写入哪些路径（不提交） |
+| `UploadFiles(repo, ref, dir, localPaths, msg)` | 上传本地文件 / 文件夹 |
+
+**对话框与认证**
+
+| 前端调用 | 作用 |
+|---|---|
+| `PickFolder()` | 选择下载目录 |
+| `PickUploadFiles()` / `PickUploadFolder()` | 选择要上传的本地文件 / 文件夹 |
 | `GetAuth()` | 读取当前认证状态 |
-| `SetClientID(id)` | 保存 OAuth App 的 client id |
-| `StartGitHubLogin()` | 开始 Device Flow 登录 |
-| `CancelGitHubLogin()` | 取消等待中的登录 |
-| `SaveManualToken(token)` | 保存手动填写的 PAT |
-| `ClearAuth()` | 清除已保存的凭据 |
+| `StartGitHubLogin()` / `CancelGitHubLogin()` | 开始 / 取消 Device Flow 登录 |
+| `SaveManualToken(token)` / `ClearAuth()` | 保存手动 Token / 清除凭据 |
 | `OpenExternal(url)` | 用系统浏览器打开 https 链接 |
 
-认证相关的进度通过事件回传：
+后台通过事件回传进度：
 
 | 事件 | 何时发出 |
 |---|---|
@@ -157,21 +239,24 @@ RepoDownloader/
 | `github-login-done` | 授权成功，已保存凭据 |
 | `github-login-error` | 登录失败 / 取消 / 超时 |
 
-
 ## 实现说明
 
 - **目录树**：`GET /repos/{owner}/{repo}/git/trees/{ref}?recursive=1` 一次拿到
   全量文件列表（扁平），前端再还原成树。
 - **下载**：走 `raw.githubusercontent.com`，8 个 worker goroutine 并发，
   写入时保留原有相对路径。
-- **路径安全**：`safeJoin` 会拒绝含 `..` 的条目，防止写到目标目录之外。
+- **路径安全**：下载用 `safeJoin` 拒绝含 `..` 的条目，防止写到目标目录之外；
+  写操作用 `cleanRepoPath` 拒绝 `..`、绝对路径和空路径段。
 - **代理**：Go 默认只认 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量，
   `proxy_windows.go` 额外读取注册表里的系统代理设置，让程序跟随浏览器。
-- **截断**：GitHub 对超大仓库（约 10 万条目以上）会截断返回，界面会给出提示。
+- **截断**：GitHub 对超大仓库（约 10 万条目以上）会截断返回，界面会给出提示；
+  写操作遇到截断会直接拒绝，避免误删。
 
 ## 已知限制
 
 - 只支持 GitHub 的公开/私有仓库。
 - 分支下拉只列出分支，不含 tag / 具体 commit。
-- 内置的 client_id 属于本机作者自己注册的 OAuth App；如果你要对外分发，
+- 写操作直接提交到当前分支（不建 PR），且**没有撤销按钮**，删错了只能去 git 历史里找。
+- 内置编辑器只处理 UTF-8 文本文件，上限 2 MiB；更大的或二进制文件请用「下载」。
+- 内置的 client_id 属于作者自己注册的 OAuth App；如果要对公众分发，
   建议换成自己的（见「GitHub 认证」）。

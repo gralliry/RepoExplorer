@@ -3,3 +3,6 @@ build/bin
 
 # Wails 自动生成的绑定，无需提交
 frontend/wailsjs
+
+# 误在仓库根目录执行 go build 时留下的二进制
+*.exe

@@ -30,11 +30,12 @@
     <section class="panel tree-panel">
       <div class="panel-head">
         <input id="filter" type="search" placeholder="筛选路径，例如 src/ 或 .rs" />
+        <button id="refresh" class="ghost" title="重新拉取目录">刷新</button>
         <button id="select-all" class="ghost">全选</button>
         <button id="clear-all" class="ghost">清空</button>
       </div>
       <div id="tree" class="tree">
-        <div class="empty">输入仓库后点击“加载目录”</div>
+        <div class="empty">输入仓库后点击“加载目录”<br />右键文件或文件夹可以进行增删改</div>
       </div>
     </section>
 
@@ -53,7 +54,12 @@
         </div>
       </div>
 
-      <button id="download" class="primary wide">开始下载</button>
+      <button id="download" class="primary wide">下载选中</button>
+
+      <div class="row-btns">
+        <button id="move-selected" class="ghost">移动选中</button>
+        <button id="delete-selected" class="ghost danger-text">删除选中</button>
+      </div>
 
       <div class="progress"><div id="bar"></div></div>
       <div id="bar-text" class="muted center">0 / 0 (0%)</div>
@@ -74,7 +80,6 @@
       </div>
 
       <div class="modal-body">
-        <!-- already authenticated -->
         <section id="auth-view-user" class="hidden">
           <div class="muted">当前认证方式</div>
           <div class="auth-user" id="auth-user-name">—</div>
@@ -82,11 +87,8 @@
           <button id="auth-logout" class="ghost wide">退出 / 清除凭据</button>
         </section>
 
-        <!-- device flow in progress -->
         <section id="auth-view-code" class="hidden">
-          <p class="muted">
-            浏览器里应该已经打开了授权页面。在那里输入下面的验证码：
-          </p>
+          <p class="muted">浏览器里应该已经打开了授权页面。在那里输入下面的验证码：</p>
           <div class="code-row">
             <span id="auth-user-code" class="user-code">········</span>
             <button id="auth-copy" class="ghost">复制</button>
@@ -98,15 +100,10 @@
           </div>
         </section>
 
-        <!-- not authenticated yet -->
         <section id="auth-view-setup">
           <button id="auth-start" class="primary wide">用 GitHub 登录</button>
-          <p class="muted">
-            浏览器会打开 GitHub 授权页，把界面上显示的验证码填进去即可。
-          </p>
-
+          <p class="muted">浏览器会打开 GitHub 授权页，把界面上显示的验证码填进去即可。</p>
           <div class="divider"><span>或者</span></div>
-
           <label class="field">
             <span>手动填写 Personal Access Token</span>
             <input id="auth-token" type="password" spellcheck="false"
@@ -117,6 +114,72 @@
       </div>
     </div>
   </div>
+
+  <!-- ------------------------------------------------------- prompt modal -->
+  <div id="prompt-modal" class="modal-backdrop hidden">
+    <div class="modal narrow">
+      <div class="modal-head">
+        <span id="prompt-title">输入</span>
+        <button id="prompt-close" class="icon-btn" title="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted" id="prompt-hint"></p>
+        <label class="field">
+          <span id="prompt-label">名称</span>
+          <input id="prompt-input" type="text" spellcheck="false" />
+        </label>
+        <div id="prompt-extra-wrap" class="hidden">
+          <label class="field">
+            <span id="prompt-extra-label">内容</span>
+            <textarea id="prompt-extra" class="editor short" spellcheck="false"></textarea>
+          </label>
+        </div>
+        <div class="row-btns">
+          <button id="prompt-cancel" class="ghost">取消</button>
+          <button id="prompt-ok" class="primary">确定</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------ confirm modal -->
+  <div id="confirm-modal" class="modal-backdrop hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <span id="confirm-title">确认</span>
+        <button id="confirm-close" class="icon-btn" title="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted" id="confirm-message"></p>
+        <div id="confirm-list" class="change-list"></div>
+        <div class="row-btns">
+          <button id="confirm-cancel" class="ghost">取消</button>
+          <button id="confirm-ok" class="primary danger">确认</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------- editor modal -->
+  <div id="editor-modal" class="modal-backdrop hidden">
+    <div class="modal wide-modal">
+      <div class="modal-head">
+        <span id="editor-title">编辑</span>
+        <button id="editor-close" class="icon-btn" title="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted" id="editor-hint"></p>
+        <textarea id="editor-text" class="editor" spellcheck="false"></textarea>
+        <div class="row-btns">
+          <button id="editor-cancel" class="ghost">取消</button>
+          <button id="editor-save" class="primary">保存并提交</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------ context menu -->
+  <div id="ctx-menu" class="ctx-menu hidden"></div>
 
   <div id="toast" class="toast"></div>
   <script src="main.js"></script>
