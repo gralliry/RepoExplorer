@@ -19,8 +19,6 @@ const filterEl = $('filter');
 const listEl = $('list');
 const crumbEl = $('breadcrumb');
 const toastEl = $('toast');
-const authBtn = $('auth-btn');
-const authModal = $('auth-modal');
 const ctxMenu = $('ctx-menu');
 
 /* -------------------------------------------------------------- app state */
@@ -288,37 +286,43 @@ function openContextMenu(event, entries) {
 }
 
 /* --------------------------------------------------------- auth */
-function renderAuthButton() {
-  authBtn.classList.toggle('on', auth.loggedIn);
-  if (auth.loggedIn && auth.source === 'oauth') authBtn.textContent = `● @${auth.login || '已登录'}`;
-  else if (auth.loggedIn) authBtn.textContent = '● Token 已设置';
-  else authBtn.textContent = '登录 GitHub';
-}
-
+// Sign-in lives inside the "open repository" dialog: while logged out its top
+// section shows the login UI instead of the repository list.
 async function refreshAuth() {
   try { auth = await api().GetAuth(); }
   catch (err) { auth = { loggedIn: false, login: '', source: '' }; }
-  renderAuthButton();
+  renderAuthArea();
+}
+
+function renderAuthArea() {
+  const loggedIn = !!auth.loggedIn;
+  $('auth-box').classList.toggle('hidden', loggedIn);
+  $('myrepo-box').classList.toggle('hidden', !loggedIn);
+  $('auth-logout').classList.toggle('hidden', !loggedIn);
+
+  if (!loggedIn) showAuthView('setup');
+  renderMyRepoState();
+}
+
+function renderMyRepoState() {
+  const state = $('myrepo-state');
+  if (!auth.loggedIn) {
+    state.textContent = '未登录';
+    return;
+  }
+  const who = auth.source === 'oauth' ? `@${auth.login || '(未知用户)'}` : '手动 Token';
+  let text = `已登录 ${who}`;
+  if (myReposLoading) text += ' · 加载中…';
+  else if (myReposError) text += ' · 加载失败';
+  else if (myReposLoaded) text += ` · ${myRepos.length} 个`;
+  state.textContent = text;
 }
 
 function showAuthView(name) {
-  for (const view of ['user', 'code', 'setup']) $('auth-view-' + view).classList.toggle('hidden', view !== name);
-}
-
-function openAuthModal() {
-  authModal.classList.remove('hidden');
-  if (auth.loggedIn) {
-    $('auth-user-name').textContent = auth.source === 'oauth' ? `@${auth.login || '(未知用户)'}` : '手动 Token';
-    $('auth-user-source').textContent = auth.source === 'oauth'
-      ? '已通过 GitHub OAuth 登录，凭据已保存到本地'
-      : '正在使用手动填写的 Personal Access Token';
-    showAuthView('user');
-  } else {
-    showAuthView('setup');
+  for (const view of ['setup', 'code']) {
+    $('auth-view-' + view).classList.toggle('hidden', view !== name);
   }
 }
-
-const closeAuthModal = () => authModal.classList.add('hidden');
 
 function openExternal(url) {
   if (!url) return;
@@ -328,7 +332,7 @@ function openExternal(url) {
 function requireLogin() {
   if (auth.loggedIn) return true;
   toast('这个操作需要先登录 GitHub', true);
-  openAuthModal();
+  openOpenModal();
   return false;
 }
 
@@ -1122,8 +1126,9 @@ function openOpenModal() {
   openModal('open-modal');
   $('manual-repo').value = currentRepo || '';
   $('myrepo-search').value = '';
+  renderAuthArea();
   renderMyRepos();
-  refreshMyRepos();
+  if (auth.loggedIn) refreshMyRepos();
 }
 
 function openRepo(fullName) {
@@ -1140,7 +1145,7 @@ async function refreshMyRepos(force = false) {
     myRepos = [];
     myReposLoaded = false;
     myReposError = '';
-    $('myrepo-state').textContent = '登录后显示';
+    renderMyRepoState();
     renderMyRepos();
     return;
   }
@@ -1148,19 +1153,18 @@ async function refreshMyRepos(force = false) {
   if (myReposLoaded && !force) return;
 
   myReposLoading = true;
-  $('myrepo-state').textContent = '加载中…';
+  renderMyRepoState();
   try {
     myRepos = (await api().ListMyRepos()) || [];
     myReposError = '';
     myReposLoaded = true;
-    $('myrepo-state').textContent = `${myRepos.length} 个`;
   } catch (err) {
     myRepos = [];
     myReposError = errText(err);
     myReposLoaded = false;
-    $('myrepo-state').textContent = '';
   } finally {
     myReposLoading = false;
+    renderMyRepoState();
     renderMyRepos();
   }
 }
@@ -1353,10 +1357,6 @@ document.addEventListener('keydown', (e) => {
 refEl.onchange = () => { if (info) load(); };
 
 /* ------------------------------------------------------------- auth wiring */
-authBtn.onclick = openAuthModal;
-$('auth-close').onclick = closeAuthModal;
-authModal.addEventListener('click', (e) => { if (e.target === authModal) closeAuthModal(); });
-
 $('auth-start').onclick = async () => {
   try {
     await api().StartGitHubLogin();
@@ -1381,7 +1381,7 @@ $('auth-copy').onclick = () => {
 $('auth-cancel').onclick = async () => {
   try { await api().CancelGitHubLogin(); } catch (err) { /* 忽略 */ }
   deviceFlow = null;
-  showAuthView(auth.loggedIn ? 'user' : 'setup');
+  showAuthView('setup');
 };
 
 $('auth-save-token').onclick = async () => {
@@ -1390,8 +1390,10 @@ $('auth-save-token').onclick = async () => {
   try {
     await api().SaveManualToken(token);
     $('auth-token').value = '';
+    myReposLoaded = false;
     await refreshAuth();
-    closeAuthModal();
+    renderMyRepos();
+    await refreshMyRepos();
     toast('Token 已保存');
   } catch (err) {
     toast(errText(err), true);
@@ -1401,11 +1403,11 @@ $('auth-save-token').onclick = async () => {
 $('auth-logout').onclick = async () => {
   try {
     await api().ClearAuth();
-    await refreshAuth();
     myRepos = [];
     myReposLoaded = false;
     myReposError = '';
-    openAuthModal();
+    await refreshAuth();
+    renderMyRepos();
     toast('已清除本地凭据');
   } catch (err) {
     toast(errText(err), true);
@@ -1422,7 +1424,8 @@ function registerLoginEvents(attempt = 0) {
     deviceFlow = code;
     $('auth-user-code').textContent = code.userCode;
     $('auth-code-status').textContent = `等待你在浏览器中授权…（验证码 ${code.expiresIn} 秒内有效）`;
-    authModal.classList.remove('hidden');
+    openModal('open-modal');
+    renderAuthArea();
     showAuthView('code');
   });
 
@@ -1430,14 +1433,15 @@ function registerLoginEvents(attempt = 0) {
     deviceFlow = null;
     myReposLoaded = false;      // the picker should reload the list for this account
     await refreshAuth();
-    closeAuthModal();
+    renderMyRepos();
+    await refreshMyRepos();
     toast(`已登录 GitHub：@${result.login || '(未知用户)'}`);
   });
 
   rt().EventsOn('github-login-error', (message) => {
     deviceFlow = null;
     toast(String(message), true);
-    showAuthView(auth.loggedIn ? 'user' : 'setup');
+    if (!auth.loggedIn) showAuthView('setup');
   });
 }
 

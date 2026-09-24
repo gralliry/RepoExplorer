@@ -20,10 +20,6 @@
       <span>分支</span>
       <select id="ref"><option value="">默认分支</option></select>
     </label>
-    <div class="field auth-field">
-      <span>认证</span>
-      <button id="auth-btn" class="ghost auth-btn">登录 GitHub</button>
-    </div>
     <button id="load" class="primary">打开仓库</button>
   </header>
 
@@ -71,9 +67,42 @@
           <div class="open-title">
             我的仓库
             <span class="muted" id="myrepo-state"></span>
+            <button id="auth-logout" class="link-btn hidden">退出登录</button>
           </div>
-          <input id="myrepo-search" type="search" placeholder="搜索我的仓库…" />
-          <div id="myrepo-list" class="repo-list"></div>
+
+          <!-- 未登录时，这里直接就是登录界面 -->
+          <div id="auth-box" class="hidden">
+            <section id="auth-view-setup">
+              <button id="auth-start" class="primary wide">用 GitHub 登录</button>
+              <p class="muted">浏览器会打开 GitHub 授权页，把界面上显示的验证码填进去即可。</p>
+              <div class="divider"><span>或者</span></div>
+              <label class="field">
+                <span>手动填写 Personal Access Token</span>
+                <input id="auth-token" type="password" spellcheck="false"
+                       placeholder="ghp_… / github_pat_…" />
+              </label>
+              <button id="auth-save-token" class="ghost wide">使用这个 Token</button>
+            </section>
+
+            <section id="auth-view-code" class="hidden">
+              <p class="muted">浏览器里应该已经打开了授权页面。在那里输入下面的验证码：</p>
+              <div class="code-row">
+                <span id="auth-user-code" class="user-code">········</span>
+                <button id="auth-copy" class="ghost">复制</button>
+              </div>
+              <p class="muted" id="auth-code-status">等待你在浏览器中授权…</p>
+              <div class="row-btns">
+                <button id="auth-open" class="ghost">重新打开浏览器</button>
+                <button id="auth-cancel" class="ghost">取消</button>
+              </div>
+            </section>
+          </div>
+
+          <!-- 已登录时显示仓库列表 -->
+          <div id="myrepo-box">
+            <input id="myrepo-search" type="search" placeholder="搜索我的仓库…" />
+            <div id="myrepo-list" class="repo-list"></div>
+          </div>
         </section>
 
         <div class="divider"><span>或者</span></div>
@@ -86,50 +115,6 @@
             <button id="manual-open" class="primary">打开</button>
           </div>
           <p class="muted">公开仓库只有下载功能，不能新建、上传、编辑、重命名或删除。</p>
-        </section>
-      </div>
-    </div>
-  </div>
-
-  <!-- ---------------------------------------------------------- auth modal -->
-  <div id="auth-modal" class="modal-backdrop hidden">
-    <div class="modal">
-      <div class="modal-head">
-        <span>GitHub 认证</span>
-        <button id="auth-close" class="icon-btn" title="关闭">✕</button>
-      </div>
-
-      <div class="modal-body">
-        <section id="auth-view-user" class="hidden">
-          <div class="muted">当前认证方式</div>
-          <div class="auth-user" id="auth-user-name">—</div>
-          <div class="muted" id="auth-user-source"></div>
-          <button id="auth-logout" class="ghost wide">退出 / 清除凭据</button>
-        </section>
-
-        <section id="auth-view-code" class="hidden">
-          <p class="muted">浏览器里应该已经打开了授权页面。在那里输入下面的验证码：</p>
-          <div class="code-row">
-            <span id="auth-user-code" class="user-code">········</span>
-            <button id="auth-copy" class="ghost">复制</button>
-          </div>
-          <p class="muted" id="auth-code-status">等待你在浏览器中授权…</p>
-          <div class="row-btns">
-            <button id="auth-open" class="ghost">重新打开浏览器</button>
-            <button id="auth-cancel" class="ghost">取消</button>
-          </div>
-        </section>
-
-        <section id="auth-view-setup">
-          <button id="auth-start" class="primary wide">用 GitHub 登录</button>
-          <p class="muted">浏览器会打开 GitHub 授权页，把界面上显示的验证码填进去即可。</p>
-          <div class="divider"><span>或者</span></div>
-          <label class="field">
-            <span>手动填写 Personal Access Token</span>
-            <input id="auth-token" type="password" spellcheck="false"
-                   placeholder="ghp_… / github_pat_…" />
-          </label>
-          <button id="auth-save-token" class="ghost wide">使用这个 Token</button>
         </section>
       </div>
     </div>
