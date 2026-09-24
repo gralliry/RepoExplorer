@@ -13,7 +13,7 @@ import (
 
 const (
 	apiBase   = "https://api.github.com"
-	userAgent = "RepoDownloader/0.1"
+	userAgent = "RepoExplorer/0.1"
 )
 
 type FileEntry struct {

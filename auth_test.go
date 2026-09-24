@@ -73,7 +73,7 @@ func TestAuthFileLocation(t *testing.T) {
 		t.Fatalf("SaveManualToken: %v", err)
 	}
 
-	want := filepath.Join(dir, "RepoDownloader", "auth.json")
+	want := filepath.Join(dir, "RepoExplorer", "auth.json")
 	data, err := os.ReadFile(want)
 	if err != nil {
 		t.Fatalf("期望凭据写在 %s，但读不到：%v", want, err)

@@ -1,4 +1,4 @@
-/* Frontend for RepoDownloader (Wails / Go backend).
+/* Frontend for RepoExplorer (Wails / Go backend).
  *
  * The Go side owns authentication (OAuth device flow or a manual token) and all
  * writes; every write goes through the Git Data API so an operation like

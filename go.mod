@@ -1,4 +1,4 @@
-module github.com/gralliry/RepoDownloader
+module github.com/gralliry/RepoExplorer
 
 go 1.25.0
 

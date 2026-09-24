@@ -13,7 +13,7 @@ import (
 // there is no sane way to fake the Git Data API dance.
 //
 //	$env:GITHUB_TOKEN     = (gh auth token)
-//	$env:GITHUB_TEST_REPO = "you/RepoDownloader-scratch"
+//	$env:GITHUB_TEST_REPO = "you/RepoExplorer-scratch"
 //	go test -run Live -v ./...
 
 func liveWriteEnv(t *testing.T) (*App, string, string) {

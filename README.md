@@ -1,4 +1,4 @@
-# RepoDownloader
+# RepoExplorer
 
 把 GitHub 仓库当成一个可读写的文件夹来用的桌面工具：浏览目录树、下载、上传、新建、
 编辑、重命名、移动、删除，都在本地完成 —— 每次改动落到仓库上就是**一个提交**。
@@ -54,7 +54,7 @@
 
 ```powershell
 wails dev      # 开发模式，改 Go 代码会自动重编译
-wails build    # 生成 build\bin\RepoDownloader.exe
+wails build    # 生成 build\bin\RepoExplorer.exe
 ```
 
 前端是**无构建**的：`frontend/dist/` 里就是普通 HTML/CSS/JS，
@@ -73,11 +73,11 @@ $env:LIVE_GITHUB=1; go test -run Live -v ./...   # 真实访问 GitHub API 的�
 写操作测试需要**一个可以随便改的仓库**，它们会真实地创建、重命名、移动、删除文件：
 
 ```powershell
-gh repo create RepoDownloader-scratch --private --add-readme
+gh repo create RepoExplorer-scratch --private --add-readme
 $env:GITHUB_TOKEN     = (gh auth token)
-$env:GITHUB_TEST_REPO = "you/RepoDownloader-scratch"
+$env:GITHUB_TEST_REPO = "you/RepoExplorer-scratch"
 go test -run LiveWrite -v ./...
-gh repo delete you/RepoDownloader-scratch --yes
+gh repo delete you/RepoExplorer-scratch --yes
 ```
 
 覆盖的流程：新建 → 读回 → 更新 → 原地重命名 → 上传本地文件夹 → 移动整个文件夹
@@ -96,7 +96,7 @@ gh repo delete you/RepoDownloader-scratch --yes
 ## 项目结构
 
 ```
-RepoDownloader/
+RepoExplorer/
 ├─ main.go             wails.Run 配置、嵌入 frontend/dist
 ├─ app.go              App 结构体 + PickFolder（目录选择）
 ├─ auth.go             GitHub 认证：OAuth Device Flow、凭据读写
@@ -169,7 +169,7 @@ wails build -ldflags "-X main.defaultClientID=Ov23li..."
 
    | 字段 | 填什么 |
    |---|---|
-   | Application name | 随便，例如 `RepoDownloader` |
+   | Application name | 随便，例如 `RepoExplorer` |
    | Homepage URL | 随便，例如 `https://github.com/` |
    | Application description | 可留空 |
    | Authorization callback URL | 填 `http://localhost`（Device Flow 用不到，但必填） |
@@ -190,7 +190,7 @@ wails build -ldflags "-X main.defaultClientID=Ov23li..."
 两种方式的凭据都保存在：
 
 ```
-%APPDATA%\RepoDownloader\auth.json
+%APPDATA%\RepoExplorer\auth.json
 ```
 
 里面是明文（`token` / `tokenSource` / `login`），删掉这个文件就等于退出登录。

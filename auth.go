@@ -32,7 +32,7 @@ const (
 //	wails build -ldflags "-X main.defaultClientID=Ov23li..."
 var defaultClientID = "Ov23li65G34wRLNaxbvB"
 
-// authConfig is persisted to %APPDATA%\RepoDownloader\auth.json
+// authConfig is persisted to %APPDATA%\RepoExplorer\auth.json
 type authConfig struct {
 	Token       string `json:"token"`
 	TokenSource string `json:"tokenSource"` // "oauth" | "manual"
@@ -67,7 +67,7 @@ func authConfigPath() string {
 			base = "."
 		}
 	}
-	return filepath.Join(base, "RepoDownloader", "auth.json")
+	return filepath.Join(base, "RepoExplorer", "auth.json")
 }
 
 func (a *App) loadAuth() {

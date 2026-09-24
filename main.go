@@ -15,7 +15,7 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:     "RepoDownloader",
+		Title:     "RepoExplorer",
 		Width:     1180,
 		Height:    760,
 		MinWidth:  900,

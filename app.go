@@ -13,7 +13,7 @@ type App struct {
 	ctx context.Context
 
 	// Authentication (see auth.go). The token is persisted to
-	// %APPDATA%\RepoDownloader\auth.json.
+	// %APPDATA%\RepoExplorer\auth.json.
 	authMu sync.Mutex
 	auth   authConfig
 
