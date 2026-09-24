@@ -29,8 +29,12 @@ type githubRepo struct {
 const reposPerPage = 100
 const reposMaxPages = 5 // 500 repositories is plenty for a picker
 
-// ListMyRepos returns the repositories the signed-in user can push to,
-// most recently updated first. Requires authentication.
+// ListMyRepos returns the repositories owned by the signed-in user, most
+// recently updated first. Requires authentication.
+//
+// affiliation=owner matters: without it GitHub also returns repositories you
+// merely collaborate on (someone else's repo) and repositories of every
+// organisation you belong to, which is not what "my repositories" means.
 func (a *App) ListMyRepos() ([]RepoSummary, error) {
 	token := a.effectiveToken()
 	if token == "" {
@@ -46,7 +50,7 @@ func (a *App) ListMyRepos() ([]RepoSummary, error) {
 	out := make([]RepoSummary, 0, reposPerPage)
 	for page := 1; page <= reposMaxPages; page++ {
 		url := fmt.Sprintf(
-			"%s/user/repos?per_page=%d&page=%d&sort=updated&affiliation=owner,collaborator,organization_member",
+			"%s/user/repos?per_page=%d&page=%d&sort=updated&affiliation=owner",
 			apiBase, reposPerPage, page,
 		)
 
