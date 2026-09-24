@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RepoDownloader</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="toolbar">
+    <label class="field grow">
+      <span>仓库</span>
+      <input id="repo" type="text" spellcheck="false"
+             placeholder="owner/repo 或 https://github.com/owner/repo" />
+    </label>
+    <label class="field">
+      <span>分支</span>
+      <select id="ref"><option value="">默认分支</option></select>
+    </label>
+    <div class="field auth-field">
+      <span>认证</span>
+      <button id="auth-btn" class="ghost auth-btn">登录 GitHub</button>
+    </div>
+    <button id="load" class="primary">加载目录</button>
+  </header>
+
+  <div id="repo-meta" class="meta">尚未加载仓库</div>
+
+  <main>
+    <section class="panel tree-panel">
+      <div class="panel-head">
+        <input id="filter" type="search" placeholder="筛选路径，例如 src/ 或 .rs" />
+        <button id="select-all" class="ghost">全选</button>
+        <button id="clear-all" class="ghost">清空</button>
+      </div>
+      <div id="tree" class="tree">
+        <div class="empty">输入仓库后点击“加载目录”</div>
+      </div>
+    </section>
+
+    <aside class="panel side-panel">
+      <div class="side-block">
+        <div class="side-title">已选择</div>
+        <div class="big"><span id="stat-count">0</span> <small>个文件</small></div>
+        <div class="muted">合计约 <span id="stat-size">0 B</span></div>
+      </div>
+
+      <div class="side-block">
+        <div class="side-title">下载到</div>
+        <div class="dest-row">
+          <input id="dest" type="text" readonly placeholder="尚未选择目录" />
+          <button id="pick" class="ghost">选择…</button>
+        </div>
+      </div>
+
+      <button id="download" class="primary wide">开始下载</button>
+
+      <div class="progress"><div id="bar"></div></div>
+      <div id="bar-text" class="muted center">0 / 0 (0%)</div>
+
+      <div class="side-block grow">
+        <div class="side-title">日志</div>
+        <div id="log" class="log"></div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ---------------------------------------------------------- auth modal -->
+  <div id="auth-modal" class="modal-backdrop hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <span>GitHub 认证</span>
+        <button id="auth-close" class="icon-btn" title="关闭">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- already authenticated -->
+        <section id="auth-view-user" class="hidden">
+          <div class="muted">当前认证方式</div>
+          <div class="auth-user" id="auth-user-name">—</div>
+          <div class="muted" id="auth-user-source"></div>
+          <button id="auth-logout" class="ghost wide">退出 / 清除凭据</button>
+        </section>
+
+        <!-- device flow in progress -->
+        <section id="auth-view-code" class="hidden">
+          <p class="muted">
+            浏览器里应该已经打开了授权页面。在那里输入下面的验证码：
+          </p>
+          <div class="code-row">
+            <span id="auth-user-code" class="user-code">········</span>
+            <button id="auth-copy" class="ghost">复制</button>
+          </div>
+          <p class="muted" id="auth-code-status">等待你在浏览器中授权…</p>
+          <div class="row-btns">
+            <button id="auth-open" class="ghost">重新打开浏览器</button>
+            <button id="auth-cancel" class="ghost">取消</button>
+          </div>
+        </section>
+
+        <!-- not authenticated yet -->
+        <section id="auth-view-setup">
+          <button id="auth-start" class="primary wide">用 GitHub 登录</button>
+          <p class="muted">
+            浏览器会打开 GitHub 授权页，把界面上显示的验证码填进去即可。
+          </p>
+
+          <div class="divider"><span>或者</span></div>
+
+          <label class="field">
+            <span>手动填写 Personal Access Token</span>
+            <input id="auth-token" type="password" spellcheck="false"
+                   placeholder="ghp_… / github_pat_…" />
+          </label>
+          <button id="auth-save-token" class="ghost wide">使用这个 Token</button>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="main.js"></script>
+</body>
+</html>

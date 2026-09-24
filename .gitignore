@@ -1,0 +1,5 @@
+# 编译产物
+build/bin
+
+# Wails 自动生成的绑定，无需提交
+frontend/wailsjs
