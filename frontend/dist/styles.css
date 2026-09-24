@@ -243,7 +243,7 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
 }
 .status-dest { margin-left: auto; cursor: pointer; overflow: hidden; text-overflow: ellipsis; }
 .status-dest:hover { color: var(--accent); text-decoration: underline; }
-.status-progress { flex: none; }
+.status-progress { flex: none; margin-left: auto; }
 .status-progress .bar {
   display: inline-block;
   width: 90px;

@@ -107,3 +107,17 @@ func tempFilePath(repo, ref, repoPath string) (string, error) {
 	}
 	return full, nil
 }
+
+// TempFolder is where opened files are materialised, shown in the settings.
+func (a *App) TempFolder() string {
+	return filepath.Join(os.TempDir(), "RepoExplorer")
+}
+
+// OpenTempFolder opens that folder in the file manager.
+func (a *App) OpenTempFolder() error {
+	dir := a.TempFolder()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("创建临时目录失败：%w", err)
+	}
+	return openWithSystemDefault(dir)
+}

@@ -20,6 +20,7 @@
       <select id="ref"><option value="">默认分支</option></select>
     </label>
     <button id="load" class="primary">打开仓库</button>
+    <button id="settings-btn" class="nav-btn" title="设置">⚙</button>
   </header>
 
   <!-- 地址栏 / 工具栏 -->
@@ -49,7 +50,6 @@
   <!-- 状态栏 -->
   <footer class="statusbar">
     <span id="status-items">尚未加载仓库</span>
-    <span id="status-dest" class="status-dest" title="点击更改下载目录"></span>
     <span id="status-progress" class="status-progress"></span>
   </footer>
 
@@ -66,11 +66,56 @@
           <div class="open-title">
             我的仓库
             <span class="muted" id="myrepo-state"></span>
-            <button id="auth-logout" class="link-btn hidden">退出登录</button>
           </div>
 
-          <!-- 未登录时，这里直接就是登录界面 -->
+          <!-- 未登录时提示去设置里登录 -->
           <div id="auth-box" class="hidden">
+            <p class="muted">未登录，只能打开公开仓库。</p>
+            <button id="picker-to-settings" class="ghost wide">去设置里登录</button>
+          </div>
+
+          <!-- 已登录时显示仓库列表 -->
+          <div id="myrepo-box">
+            <input id="myrepo-search" type="search" placeholder="搜索我的仓库…" />
+            <div id="myrepo-list" class="repo-list"></div>
+          </div>
+        </section>
+
+        <div class="divider"><span>或者</span></div>
+
+        <section class="open-section">
+          <div class="open-title">公开仓库</div>
+          <div class="manual-row">
+            <input id="manual-repo" type="text" spellcheck="false"
+                   placeholder="owner/repo 或 https://github.com/owner/repo" />
+            <button id="manual-open" class="primary">打开</button>
+          </div>
+          <p class="muted">公开仓库只有下载功能，不能新建、上传、编辑、重命名或删除。</p>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------ settings modal -->
+  <div id="settings-modal" class="modal-backdrop hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <span>设置</span>
+        <button id="settings-close" class="icon-btn" title="关闭">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- 账号 -->
+        <section class="open-section">
+          <div class="open-title">账号 <span class="muted" id="account-state"></span></div>
+
+          <div id="account-in" class="hidden">
+            <div class="auth-user" id="account-name">—</div>
+            <div class="muted" id="account-source"></div>
+            <button id="auth-logout" class="ghost wide">退出登录</button>
+          </div>
+
+          <div id="account-out">
             <section id="auth-view-setup">
               <button id="auth-start" class="primary wide">用 GitHub 登录</button>
               <p class="muted">浏览器会打开 GitHub 授权页，把界面上显示的验证码填进去即可。</p>
@@ -96,24 +141,36 @@
               </div>
             </section>
           </div>
-
-          <!-- 已登录时显示仓库列表 -->
-          <div id="myrepo-box">
-            <input id="myrepo-search" type="search" placeholder="搜索我的仓库…" />
-            <div id="myrepo-list" class="repo-list"></div>
-          </div>
         </section>
 
-        <div class="divider"><span>或者</span></div>
+        <div class="divider"></div>
 
+        <!-- 下载 -->
         <section class="open-section">
-          <div class="open-title">公开仓库</div>
+          <div class="open-title">下载</div>
+          <label class="field">
+            <span>下载目录</span>
+            <div class="manual-row">
+              <input id="settings-dest" type="text" readonly placeholder="尚未选择" />
+              <button id="settings-pick-dest" class="ghost">选择…</button>
+            </div>
+          </label>
+          <p class="muted">下载选中文件时的保存位置。留空则第一次下载时再问你。</p>
+        </section>
+
+        <div class="divider"></div>
+
+        <!-- 打开文件 -->
+        <section class="open-section">
+          <div class="open-title">打开文件</div>
+          <p class="muted">
+            双击文件会先下载到下面这个目录，再交给系统默认程序打开。
+            程序自己不预览、不编辑，本地改动也不会写回仓库。
+          </p>
           <div class="manual-row">
-            <input id="manual-repo" type="text" spellcheck="false"
-                   placeholder="owner/repo 或 https://github.com/owner/repo" />
-            <button id="manual-open" class="primary">打开</button>
+            <input id="settings-temp" type="text" readonly />
+            <button id="settings-open-temp" class="ghost">打开目录</button>
           </div>
-          <p class="muted">公开仓库只有下载功能，不能新建、上传、编辑、重命名或删除。</p>
         </section>
       </div>
     </div>

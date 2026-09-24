@@ -37,6 +37,7 @@ let viewMode = 'details';         // 'details' | 'icons'
 let sortKey = 'name';
 let sortAsc = true;
 let dest = '';
+let tempFolder = '';
 let busy = false;
 let dragging = null;              // paths being dragged
 let auth = { loggedIn: false, login: '', source: '' };
@@ -287,12 +288,26 @@ async function refreshAuth() {
 
 function renderAuthArea() {
   const loggedIn = !!auth.loggedIn;
+
+  // inside the "open repository" dialog
   $('auth-box').classList.toggle('hidden', loggedIn);
   $('myrepo-box').classList.toggle('hidden', !loggedIn);
-  $('auth-logout').classList.toggle('hidden', !loggedIn);
 
-  if (!loggedIn) showAuthView('setup');
+  // inside the settings dialog
+  $('account-in').classList.toggle('hidden', !loggedIn);
+  $('account-out').classList.toggle('hidden', loggedIn);
+  $('account-state').textContent = loggedIn ? '' : '未登录';
+  if (loggedIn) {
+    $('account-name').textContent = auth.source === 'oauth' ? `@${auth.login || '(未知用户)'}` : '手动 Token';
+    $('account-source').textContent = auth.source === 'oauth'
+      ? '已通过 GitHub OAuth 登录，凭据已保存到本地'
+      : '正在使用手动填写的 Personal Access Token';
+  } else {
+    showAuthView('setup');
+  }
+
   renderMyRepoState();
+  renderSettingsPaths();
 }
 
 function renderMyRepoState() {
@@ -323,8 +338,25 @@ function openExternal(url) {
 function requireLogin() {
   if (auth.loggedIn) return true;
   toast('这个操作需要先登录 GitHub', true);
-  openOpenModal();
+  openSettings();
   return false;
+}
+
+/* -------------------------------------------------------------- settings */
+function renderSettingsPaths() {
+  $('settings-dest').value = dest || '';
+  $('settings-temp').value = tempFolder || '';
+}
+
+async function openSettings() {
+  openModal('settings-modal');
+  renderAuthArea();
+  try {
+    tempFolder = (await api().TempFolder()) || '';
+  } catch (err) {
+    tempFolder = '';
+  }
+  renderSettingsPaths();
 }
 
 // A repository the credentials cannot push to is download-only.
@@ -700,7 +732,6 @@ function updateStatus() {
 
   if (!info) {
     itemsEl.textContent = '尚未加载仓库';
-    $('status-dest').textContent = '';
     return;
   }
 
@@ -716,8 +747,6 @@ function updateStatus() {
   }
   if (count) text += `　　已选 ${count} 个${count && size ? `（${fmtSize(size)}）` : ''}`;
   itemsEl.textContent = text;
-
-  $('status-dest').textContent = dest ? `下载到 ${dest}` : '下载目录：未设置（点击设置）';
 }
 
 function setProgress(done, total) {
@@ -907,10 +936,14 @@ async function pasteClipboard() {
 async function chooseDest() {
   try {
     const picked = await api().PickFolder();
-    if (picked) { dest = picked; updateStatus(); }
+    if (picked) {
+      dest = picked;
+      renderSettingsPaths();
+    }
   } catch (err) {
     toast(errText(err), true);
   }
+  return dest;
 }
 
 async function downloadSelection() {
@@ -1335,6 +1368,21 @@ function renderMyRepos() {
 /* ------------------------------------------------------------------ chrome */
 loadBtn.onclick = openOpenModal;
 
+$('settings-btn').onclick = openSettings;
+$('settings-close').onclick = () => closeModal('settings-modal');
+$('settings-modal').addEventListener('click', (e) => {
+  if (e.target === $('settings-modal')) closeModal('settings-modal');
+});
+$('picker-to-settings').onclick = () => { closeModal('open-modal'); openSettings(); };
+$('settings-pick-dest').onclick = () => chooseDest();
+$('settings-open-temp').onclick = async () => {
+  try {
+    await api().OpenTempFolder();
+  } catch (err) {
+    toast(errText(err), true);
+  }
+};
+
 $('open-close').onclick = () => closeModal('open-modal');
 $('open-modal').addEventListener('click', (e) => { if (e.target === $('open-modal')) closeModal('open-modal'); });
 $('myrepo-search').oninput = renderMyRepos;
@@ -1347,7 +1395,6 @@ $('manual-repo').onkeydown = (e) => {
 filterEl.oninput = () => { render(); };
 $('refresh').onclick = doRefresh;
 $('download').onclick = downloadSelection;
-$('status-dest').onclick = chooseDest;
 $('nav-back').onclick = goBack;
 $('nav-forward').onclick = goForward;
 $('nav-up').onclick = goUp;
