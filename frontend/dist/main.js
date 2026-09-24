@@ -185,28 +185,6 @@ function confirmModal({ title, message, items = [], okText = '确认' }) {
   });
 }
 
-function editorModal({ title, content, hint = '' }) {
-  return new Promise((resolve) => {
-    $('editor-title').textContent = title;
-    $('editor-hint').textContent = hint;
-    const area = $('editor-text');
-    area.value = content;
-
-    const finish = (value) => {
-      closeModal('editor-modal');
-      $('editor-save').onclick = null;
-      $('editor-cancel').onclick = null;
-      $('editor-close').onclick = null;
-      resolve(value);
-    };
-    $('editor-save').onclick = () => finish(area.value);
-    $('editor-cancel').onclick = () => finish(null);
-    $('editor-close').onclick = () => finish(null);
-    openModal('editor-modal');
-    area.focus();
-  });
-}
-
 /* --------------------------------------------------------- context menu */
 function hideCtxMenu() { ctxMenu.classList.add('hidden'); }
 
@@ -266,7 +244,7 @@ function openContextMenu(event, entries) {
     }
     items.push('-', { label: '刷新', run: doRefresh });
   } else {
-    if (single && !single.dir) items.push({ label: '编辑', run: () => openEditor(single), disabled: ro });
+    if (single && !single.dir) items.push({ label: '打开（系统默认程序）', run: () => openFile(single) });
     if (single && single.dir) {
       items.push(
         { label: '打开', run: () => navigate(single.path) },
@@ -620,7 +598,7 @@ function selectWithModifiers(entry, e) {
 
 function openEntry(entry) {
   if (entry.dir) navigate(entry.path);
-  else openEditor(entry);
+  else openFile(entry);
 }
 
 /* -------------------------------------------------------------- navigation */
@@ -1151,32 +1129,21 @@ async function uploadInto(dir, kind) {
   await runMutation('正在上传…', () => api().UploadFiles(repoId(), info.git_ref, dir, picked, ''));
 }
 
-async function openEditor(entry) {
+// Opening a file means: fetch it, drop it in the temp folder, and let the OS
+// launch whatever program is associated with that type. No in-app preview or
+// editor — the local copy is throwaway.
+async function openFile(entry) {
   if (!info) return;
-  if (!requireWrite()) return;
 
-  let file;
-  setBusy(true, '正在读取…');
+  setBusy(true, '正在打开…');
   try {
-    file = await api().ReadFile(repoId(), info.git_ref, entry.path);
+    const local = await api().OpenFile(repoId(), info.git_ref, entry.path);
+    toast(`已用系统默认程序打开：${basename(local)}`);
   } catch (err) {
     toast(errText(err), true);
-    return;
   } finally {
     setBusy(false);
   }
-
-  if (file.tooLarge) return toast(`文件太大（${fmtSize(file.size)}），请用右键「下载」`, true);
-  if (file.binary) return toast('这是二进制文件，编辑器打不开，请用右键「下载」', true);
-
-  const content = await editorModal({
-    title: entry.path,
-    content: file.content,
-    hint: '保存会在当前分支上创建一个提交。',
-  });
-  if (content === null || content === file.content) return;
-
-  await runMutation('正在提交…', () => api().SaveFile(repoId(), info.git_ref, entry.path, content, ''));
 }
 
 /* ---------------------------------------------------------- drag & drop */
