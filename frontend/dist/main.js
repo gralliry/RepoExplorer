@@ -1069,6 +1069,7 @@ let myRepos = [];
 let myReposLoaded = false;
 let myReposLoading = false;
 let myReposError = '';
+const collapsedGroups = new Set();   // which affiliation groups the user folded away
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => (
@@ -1176,17 +1177,35 @@ function renderMyRepos() {
   }
 
   // Group by where the repository comes from, so a repo you merely collaborate
-  // on is never mistaken for one of your own.
+  // on is never mistaken for one of your own. Each group can be folded away.
   for (const [key, label] of REPO_GROUPS) {
     const group = items.filter((r) => r.category === key);
     if (!group.length) continue;
 
+    const collapsed = collapsedGroups.has(key);
+
     const head = document.createElement('div');
-    head.className = 'repo-group';
-    head.textContent = `${label} · ${group.length}`;
+    head.className = 'repo-group' + (collapsed ? ' collapsed' : '');
+    head.title = collapsed ? '展开' : '收起';
+
+    const arrow = document.createElement('span');
+    arrow.className = 'repo-group-arrow';
+    arrow.textContent = collapsed ? '▸' : '▾';
+
+    const text = document.createElement('span');
+    text.textContent = `${label} · ${group.length}`;
+
+    head.append(arrow, text);
+    head.onclick = () => {
+      if (collapsedGroups.has(key)) collapsedGroups.delete(key);
+      else collapsedGroups.add(key);
+      renderMyRepos();
+    };
     list.appendChild(head);
 
-    for (const repo of group) list.appendChild(buildRepoRow(repo));
+    if (!collapsed) {
+      for (const repo of group) list.appendChild(buildRepoRow(repo));
+    }
   }
 }
 

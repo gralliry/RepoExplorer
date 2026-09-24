@@ -298,13 +298,21 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
   position: sticky;
   top: 0;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 5px 10px;
   font-size: 11px;
   font-weight: 600;
   color: var(--muted);
   background: #eef0f4;
   border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
 }
+.repo-group:hover { color: var(--text); background: #e4e8ef; }
+.repo-group-arrow { width: 10px; text-align: center; }
+.repo-group.collapsed { border-bottom-color: transparent; }
 .repo-name { display: flex; align-items: center; gap: 6px; font-weight: 500; }
 .badge {
   padding: 1px 6px;
