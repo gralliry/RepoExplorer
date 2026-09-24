@@ -15,6 +15,9 @@ type RepoSummary struct {
 	DefaultBranch string `json:"defaultBranch"`
 	UpdatedAt     string `json:"updatedAt"`
 	Language      string `json:"language"`
+	// "owner" (yours), "collaborator" (someone else's repo you can push to) or
+	// "organization" (owned by an organisation you belong to).
+	Category string `json:"category"`
 }
 
 type githubRepo struct {
@@ -24,17 +27,24 @@ type githubRepo struct {
 	DefaultBranch string `json:"default_branch"`
 	UpdatedAt     string `json:"updated_at"`
 	Language      string `json:"language"`
+	Owner         struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
+	} `json:"owner"`
 }
 
 const reposPerPage = 100
 const reposMaxPages = 5 // 500 repositories is plenty for a picker
 
-// ListMyRepos returns the repositories owned by the signed-in user, most
-// recently updated first. Requires authentication.
+// ListMyRepos returns everything the signed-in user can reach, most recently
+// updated first, tagged with where it came from:
 //
-// affiliation=owner matters: without it GitHub also returns repositories you
-// merely collaborate on (someone else's repo) and repositories of every
-// organisation you belong to, which is not what "my repositories" means.
+//   - owner         repositories they own
+//   - collaborator  someone else's repository they were added to
+//   - organization  a repository of an organisation they belong to
+//
+// All three are useful, so they are returned rather than filtered; the UI groups
+// them. Requires authentication.
 func (a *App) ListMyRepos() ([]RepoSummary, error) {
 	token := a.effectiveToken()
 	if token == "" {
@@ -47,10 +57,18 @@ func (a *App) ListMyRepos() ([]RepoSummary, error) {
 	}
 	client := newHTTPClient(60 * time.Second)
 
+	// Needed to tell "mine" apart from "someone else's".
+	var me struct {
+		Login string `json:"login"`
+	}
+	if err := apiGet(ctx, client, apiBase+"/user", token, &me); err != nil {
+		return nil, err
+	}
+
 	out := make([]RepoSummary, 0, reposPerPage)
 	for page := 1; page <= reposMaxPages; page++ {
 		url := fmt.Sprintf(
-			"%s/user/repos?per_page=%d&page=%d&sort=updated&affiliation=owner",
+			"%s/user/repos?per_page=%d&page=%d&sort=updated&affiliation=owner,collaborator,organization_member",
 			apiBase, reposPerPage, page,
 		)
 
@@ -63,6 +81,15 @@ func (a *App) ListMyRepos() ([]RepoSummary, error) {
 			if strings.TrimSpace(r.FullName) == "" {
 				continue
 			}
+
+			category := "collaborator"
+			switch {
+			case me.Login != "" && strings.EqualFold(r.Owner.Login, me.Login):
+				category = "owner"
+			case strings.EqualFold(r.Owner.Type, "Organization"):
+				category = "organization"
+			}
+
 			out = append(out, RepoSummary{
 				FullName:      r.FullName,
 				Private:       r.Private,
@@ -70,6 +97,7 @@ func (a *App) ListMyRepos() ([]RepoSummary, error) {
 				DefaultBranch: r.DefaultBranch,
 				UpdatedAt:     r.UpdatedAt,
 				Language:      r.Language,
+				Category:      category,
 			})
 		}
 

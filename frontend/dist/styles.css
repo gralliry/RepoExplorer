@@ -294,6 +294,17 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
 }
 .repo-row:last-child { border-bottom: none; }
 .repo-row:hover { background: var(--accent-soft); }
+.repo-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: #eef0f4;
+  border-bottom: 1px solid var(--border);
+}
 .repo-name { display: flex; align-items: center; gap: 6px; font-weight: 500; }
 .badge {
   padding: 1px 6px;

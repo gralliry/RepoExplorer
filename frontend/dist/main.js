@@ -1123,6 +1123,36 @@ async function refreshMyRepos(force = false) {
   }
 }
 
+const REPO_GROUPS = [
+  ['owner', '我的仓库'],
+  ['organization', '组织仓库'],
+  ['collaborator', '协作仓库（别人的仓库，你有权限）'],
+];
+
+function buildRepoRow(repo) {
+  const row = document.createElement('div');
+  row.className = 'repo-row';
+
+  const name = document.createElement('div');
+  name.className = 'repo-name';
+  name.textContent = repo.fullName;
+  if (repo.private) {
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.textContent = '私有';
+    name.appendChild(badge);
+  }
+
+  const desc = document.createElement('div');
+  desc.className = 'repo-desc';
+  desc.textContent = repo.description || '';
+
+  row.append(name, desc);
+  row.title = repo.description || repo.fullName;
+  row.onclick = () => openRepo(repo.fullName);
+  return row;
+}
+
 function renderMyRepos() {
   const list = $('myrepo-list');
   list.innerHTML = '';
@@ -1145,28 +1175,18 @@ function renderMyRepos() {
     return;
   }
 
-  for (const repo of items) {
-    const row = document.createElement('div');
-    row.className = 'repo-row';
+  // Group by where the repository comes from, so a repo you merely collaborate
+  // on is never mistaken for one of your own.
+  for (const [key, label] of REPO_GROUPS) {
+    const group = items.filter((r) => r.category === key);
+    if (!group.length) continue;
 
-    const name = document.createElement('div');
-    name.className = 'repo-name';
-    name.textContent = repo.fullName;
-    if (repo.private) {
-      const badge = document.createElement('span');
-      badge.className = 'badge';
-      badge.textContent = '私有';
-      name.appendChild(badge);
-    }
+    const head = document.createElement('div');
+    head.className = 'repo-group';
+    head.textContent = `${label} · ${group.length}`;
+    list.appendChild(head);
 
-    const desc = document.createElement('div');
-    desc.className = 'repo-desc';
-    desc.textContent = repo.description || '';
-
-    row.append(name, desc);
-    row.title = repo.description || repo.fullName;
-    row.onclick = () => openRepo(repo.fullName);
-    list.appendChild(row);
+    for (const repo of group) list.appendChild(buildRepoRow(repo));
   }
 }
 
