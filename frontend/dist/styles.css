@@ -254,6 +254,69 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
 }
 .status-progress .bar > i { display: block; height: 100%; width: 0; background: var(--accent); }
 
+/* ------------------------------------------------------------- repo picker */
+.repo-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  text-align: left;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.repo-display:hover:not(:disabled) { border-color: var(--accent); background: #fff; }
+.repo-display > #repo-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repo-display-hint { flex: none; font-size: 11px; color: var(--muted); }
+
+.modal.open-modal { width: 560px; }
+.open-section { display: flex; flex-direction: column; gap: 8px; }
+.open-title { display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 600; }
+
+.repo-list {
+  max-height: 264px;
+  overflow: auto;
+  background: #fafbfc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.repo-row {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.repo-row:last-child { border-bottom: none; }
+.repo-row:hover { background: var(--accent-soft); }
+.repo-name { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+.badge {
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 400;
+  color: #8a6d00;
+  background: #fff3bf;
+  border-radius: 999px;
+}
+.repo-desc {
+  margin-top: 2px;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repo-empty { padding: 18px; text-align: center; font-size: 12px; color: var(--muted); }
+
+.manual-row { display: flex; gap: 8px; }
+.manual-row input { flex: 1; min-width: 0; }
+.manual-row button { flex: none; }
+
 /* ---------------------------------------------------------------- modals */
 .modal-backdrop {
   position: fixed;

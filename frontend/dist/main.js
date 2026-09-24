@@ -11,7 +11,8 @@ const api = () => window.go.main.App;
 const rt = () => window.runtime;
 
 const $ = (id) => document.getElementById(id);
-const repoEl = $('repo');
+const repoDisplay = $('repo-display');
+const repoNameEl = $('repo-name');
 const refEl = $('ref');
 const loadBtn = $('load');
 const filterEl = $('filter');
@@ -24,6 +25,7 @@ const ctxMenu = $('ctx-menu');
 
 /* -------------------------------------------------------------- app state */
 let info = null;                  // RepoTree from Go
+let currentRepo = '';             // "owner/repo" currently open
 let currentPath = '';             // "" = repository root
 let history = [];
 let histIndex = -1;
@@ -693,14 +695,16 @@ function setBusy(value, label) {
 
 /* --------------------------------------------------------------- loading */
 async function load() {
-  const repo = repoEl.value.trim();
-  if (!repo) return toast('请输入仓库地址', true);
+  const repo = currentRepo.trim();
+  if (!repo) return toast('请先选择或输入一个仓库', true);
   if (busy) return;
 
   setBusy(true, '正在打开…');
   try {
     const tree = await api().FetchRepoTree(repo, refEl.value || '');
     info = tree;
+    currentRepo = `${tree.owner}/${tree.repo}`;
+    repoNameEl.textContent = currentRepo;
 
     const branches = tree.branches && tree.branches.length ? tree.branches : [tree.default_branch];
     refEl.innerHTML = '';
@@ -1060,8 +1064,125 @@ function setupDragAndDrop() {
   });
 }
 
+/* ------------------------------------------------------------ repo picker */
+let myRepos = [];
+let myReposLoaded = false;
+let myReposLoading = false;
+let myReposError = '';
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+function openOpenModal() {
+  openModal('open-modal');
+  $('manual-repo').value = currentRepo || '';
+  $('myrepo-search').value = '';
+  renderMyRepos();
+  refreshMyRepos();
+}
+
+function openRepo(fullName) {
+  const name = (fullName || '').trim();
+  if (!name) return toast('请输入仓库地址', true);
+  currentRepo = name;
+  repoNameEl.textContent = name;
+  closeModal('open-modal');
+  load();
+}
+
+async function refreshMyRepos(force = false) {
+  if (!auth.loggedIn) {
+    myRepos = [];
+    myReposLoaded = false;
+    myReposError = '';
+    $('myrepo-state').textContent = '登录后显示';
+    renderMyRepos();
+    return;
+  }
+  if (myReposLoading) return;
+  if (myReposLoaded && !force) return;
+
+  myReposLoading = true;
+  $('myrepo-state').textContent = '加载中…';
+  try {
+    myRepos = (await api().ListMyRepos()) || [];
+    myReposError = '';
+    myReposLoaded = true;
+    $('myrepo-state').textContent = `${myRepos.length} 个`;
+  } catch (err) {
+    myRepos = [];
+    myReposError = errText(err);
+    myReposLoaded = false;
+    $('myrepo-state').textContent = '';
+  } finally {
+    myReposLoading = false;
+    renderMyRepos();
+  }
+}
+
+function renderMyRepos() {
+  const list = $('myrepo-list');
+  list.innerHTML = '';
+
+  if (!auth.loggedIn) {
+    list.innerHTML = '<div class="repo-empty">登录 GitHub 后，这里会列出你的仓库</div>';
+    return;
+  }
+  if (myReposError) {
+    list.innerHTML = `<div class="repo-empty">${escapeHtml(myReposError)}</div>`;
+    return;
+  }
+
+  const q = $('myrepo-search').value.trim().toLowerCase();
+  const items = myRepos.filter((r) =>
+    !q || r.fullName.toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q));
+
+  if (!items.length) {
+    list.innerHTML = `<div class="repo-empty">${myRepos.length ? '没有匹配的仓库' : '还没有仓库'}</div>`;
+    return;
+  }
+
+  for (const repo of items) {
+    const row = document.createElement('div');
+    row.className = 'repo-row';
+
+    const name = document.createElement('div');
+    name.className = 'repo-name';
+    name.textContent = repo.fullName;
+    if (repo.private) {
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = '私有';
+      name.appendChild(badge);
+    }
+
+    const desc = document.createElement('div');
+    desc.className = 'repo-desc';
+    desc.textContent = repo.description || '';
+
+    row.append(name, desc);
+    row.title = repo.description || repo.fullName;
+    row.onclick = () => openRepo(repo.fullName);
+    list.appendChild(row);
+  }
+}
+
 /* ------------------------------------------------------------------ chrome */
-loadBtn.onclick = load;
+loadBtn.onclick = openOpenModal;
+repoDisplay.onclick = openOpenModal;
+
+$('open-close').onclick = () => closeModal('open-modal');
+$('open-modal').addEventListener('click', (e) => { if (e.target === $('open-modal')) closeModal('open-modal'); });
+$('myrepo-search').oninput = renderMyRepos;
+$('manual-open').onclick = () => openRepo($('manual-repo').value);
+$('manual-repo').onkeydown = (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter') openRepo($('manual-repo').value);
+};
+
 filterEl.oninput = () => { render(); };
 $('refresh').onclick = doRefresh;
 $('download').onclick = downloadSelection;
@@ -1150,7 +1271,6 @@ document.addEventListener('keydown', (e) => {
   else if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goForward(); }
 });
 
-repoEl.onkeydown = (e) => { if (e.key === 'Enter') load(); };
 refEl.onchange = () => { if (info) load(); };
 
 /* ------------------------------------------------------------- auth wiring */
@@ -1203,6 +1323,9 @@ $('auth-logout').onclick = async () => {
   try {
     await api().ClearAuth();
     await refreshAuth();
+    myRepos = [];
+    myReposLoaded = false;
+    myReposError = '';
     openAuthModal();
     toast('已清除本地凭据');
   } catch (err) {
@@ -1226,6 +1349,7 @@ function registerLoginEvents(attempt = 0) {
 
   rt().EventsOn('github-login-done', async (result) => {
     deviceFlow = null;
+    myReposLoaded = false;      // the picker should reload the list for this account
     await refreshAuth();
     closeAuthModal();
     toast(`已登录 GitHub：@${result.login || '(未知用户)'}`);

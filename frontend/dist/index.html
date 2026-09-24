@@ -9,11 +9,13 @@
 <body>
   <!-- 仓库选择 -->
   <header class="toolbar">
-    <label class="field grow">
+    <div class="field grow">
       <span>仓库</span>
-      <input id="repo" type="text" spellcheck="false"
-             placeholder="owner/repo 或 https://github.com/owner/repo" />
-    </label>
+      <button id="repo-display" class="repo-display" title="点击选择仓库">
+        <span id="repo-name">尚未打开仓库</span>
+        <span class="repo-display-hint">选择 ▾</span>
+      </button>
+    </div>
     <label class="field">
       <span>分支</span>
       <select id="ref"><option value="">默认分支</option></select>
@@ -55,6 +57,39 @@
     <span id="status-dest" class="status-dest" title="点击更改下载目录"></span>
     <span id="status-progress" class="status-progress"></span>
   </footer>
+
+  <!-- ------------------------------------------------------ open repo modal -->
+  <div id="open-modal" class="modal-backdrop hidden">
+    <div class="modal open-modal">
+      <div class="modal-head">
+        <span>打开仓库</span>
+        <button id="open-close" class="icon-btn" title="关闭">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <section class="open-section">
+          <div class="open-title">
+            我的仓库
+            <span class="muted" id="myrepo-state"></span>
+          </div>
+          <input id="myrepo-search" type="search" placeholder="搜索我的仓库…" />
+          <div id="myrepo-list" class="repo-list"></div>
+        </section>
+
+        <div class="divider"><span>或者</span></div>
+
+        <section class="open-section">
+          <div class="open-title">输入仓库地址</div>
+          <div class="manual-row">
+            <input id="manual-repo" type="text" spellcheck="false"
+                   placeholder="owner/repo 或 https://github.com/owner/repo" />
+            <button id="manual-open" class="primary">打开</button>
+          </div>
+          <p class="muted">公开仓库不需要登录也能打开。</p>
+        </section>
+      </div>
+    </div>
+  </div>
 
   <!-- ---------------------------------------------------------- auth modal -->
   <div id="auth-modal" class="modal-backdrop hidden">
