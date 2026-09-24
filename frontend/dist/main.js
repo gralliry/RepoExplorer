@@ -222,10 +222,19 @@ function showCtxMenu(x, y, items) {
       ctxMenu.appendChild(sep);
       continue;
     }
+    if (item.header) {
+      const head = document.createElement('div');
+      head.className = 'ctx-header';
+      head.textContent = item.label;
+      ctxMenu.appendChild(head);
+      continue;
+    }
     const el = document.createElement('div');
-    el.className = 'ctx-item' + (item.danger ? ' danger' : '');
+    el.className = 'ctx-item'
+      + (item.danger ? ' danger' : '')
+      + (item.disabled ? ' disabled' : '');
     el.textContent = item.label;
-    el.onclick = () => { hideCtxMenu(); item.run(); };
+    if (!item.disabled) el.onclick = () => { hideCtxMenu(); item.run(); };
     ctxMenu.appendChild(el);
   }
   ctxMenu.classList.remove('hidden');
@@ -237,26 +246,31 @@ function showCtxMenu(x, y, items) {
 function openContextMenu(event, entries) {
   const items = [];
   const single = entries.length === 1 ? entries[0] : null;
+  const ro = !canWrite();   // read-only repository: download only
+
+  if (ro) {
+    items.push({ label: '只读仓库，只能下载', header: true }, '-');
+  }
 
   if (!entries.length) {
     items.push(
-      { label: '新建文件…', run: () => promptNewFile(currentPath) },
-      { label: '新建文件夹…', run: () => promptNewFolder(currentPath) },
+      { label: '新建文件…', run: () => promptNewFile(currentPath), disabled: ro },
+      { label: '新建文件夹…', run: () => promptNewFolder(currentPath), disabled: ro },
       '-',
-      { label: '上传文件…', run: () => uploadInto(currentPath, 'files') },
-      { label: '上传文件夹…', run: () => uploadInto(currentPath, 'folder') },
+      { label: '上传文件…', run: () => uploadInto(currentPath, 'files'), disabled: ro },
+      { label: '上传文件夹…', run: () => uploadInto(currentPath, 'folder'), disabled: ro },
       '-',
       { label: '刷新', run: doRefresh },
     );
   } else {
-    if (single && !single.dir) items.push({ label: '编辑', run: () => openEditor(single) });
+    if (single && !single.dir) items.push({ label: '编辑', run: () => openEditor(single), disabled: ro });
     if (single && single.dir) {
       items.push(
         { label: '打开', run: () => navigate(single.path) },
         '-',
-        { label: '在此新建文件…', run: () => promptNewFile(single.path) },
-        { label: '在此新建文件夹…', run: () => promptNewFolder(single.path) },
-        { label: '上传到此…', run: () => uploadInto(single.path, 'files') },
+        { label: '在此新建文件…', run: () => promptNewFile(single.path), disabled: ro },
+        { label: '在此新建文件夹…', run: () => promptNewFolder(single.path), disabled: ro },
+        { label: '上传到此…', run: () => uploadInto(single.path, 'files'), disabled: ro },
         '-',
       );
     }
@@ -265,10 +279,10 @@ function openContextMenu(event, entries) {
       run: downloadSelection,
     });
     items.push('-');
-    if (single) items.push({ label: '重命名…', run: () => startInlineRename(single) });
-    items.push({ label: '移动到…', run: () => promptMove(entries) });
+    if (single) items.push({ label: '重命名…', run: () => startInlineRename(single), disabled: ro });
+    items.push({ label: '移动到…', run: () => promptMove(entries), disabled: ro });
     items.push('-');
-    items.push({ label: '删除', danger: true, run: () => confirmDeleteEntries(entries) });
+    items.push({ label: '删除', danger: true, run: () => confirmDeleteEntries(entries), disabled: ro });
   }
   showCtxMenu(event.clientX, event.clientY, items);
 }
@@ -316,6 +330,21 @@ function requireLogin() {
   toast('这个操作需要先登录 GitHub', true);
   openAuthModal();
   return false;
+}
+
+// A repository the credentials cannot push to is download-only.
+const canWrite = () => !!(info && info.canWrite);
+
+function requireWrite() {
+  if (!info) {
+    toast('请先打开仓库', true);
+    return false;
+  }
+  if (!canWrite()) {
+    toast('这个仓库你没有写权限，只能下载', true);
+    return false;
+  }
+  return requireLogin();
 }
 
 /* ------------------------------------------------------------ repo model */
@@ -657,8 +686,19 @@ function startPathEdit() {
 }
 
 /* --------------------------------------------------------------- status */
+function updateWriteControls() {
+  const ro = !canWrite();
+  for (const id of ['new-menu', 'upload-menu']) {
+    const btn = $(id);
+    btn.disabled = ro;
+    btn.title = ro ? '只读仓库，只能下载' : (id === 'new-menu' ? '新建' : '上传');
+  }
+}
+
 function updateStatus() {
   const itemsEl = $('status-items');
+  updateWriteControls();
+
   if (!info) {
     itemsEl.textContent = '尚未加载仓库';
     $('status-dest').textContent = '';
@@ -667,6 +707,7 @@ function updateStatus() {
 
   let text = `${currentEntries.length} 个对象`;
   if (filterEl.value.trim()) text += '（搜索结果）';
+  if (!info.canWrite) text += '　　只读（只能下载）';
 
   let count = 0;
   let size = 0;
@@ -754,7 +795,7 @@ async function doRefresh() {
 
 async function runMutation(label, fn) {
   if (!info) return toast('请先打开仓库', true);
-  if (!requireLogin()) return;
+  if (!requireWrite()) return;
 
   setBusy(true, label);
   try {
@@ -916,7 +957,7 @@ async function promptMove(entries) {
 
 // Explorer-style inline rename (F2 / context menu).
 function startInlineRename(entry) {
-  if (!requireLogin()) return;
+  if (!requireWrite()) return;
   const el = [...document.querySelectorAll('.item, .tile')]
     .find((node) => node.__entry && node.__entry.path === entry.path);
   if (!el) return;
@@ -961,7 +1002,7 @@ function startInlineRename(entry) {
 }
 
 async function uploadInto(dir, kind) {
-  if (!requireLogin()) return;
+  if (!requireWrite()) return;
 
   let picked = [];
   try {
@@ -996,7 +1037,7 @@ async function uploadInto(dir, kind) {
 
 async function openEditor(entry) {
   if (!info) return;
-  if (!requireLogin()) return;
+  if (!requireWrite()) return;
 
   let file;
   setBusy(true, '正在读取…');
@@ -1127,7 +1168,7 @@ async function refreshMyRepos(force = false) {
 const REPO_GROUPS = [
   ['owner', '我的仓库'],
   ['organization', '组织仓库'],
-  ['collaborator', '协作仓库（别人的仓库，你有权限）'],
+  ['collaborator', '协作仓库'],
 ];
 
 function buildRepoRow(repo) {

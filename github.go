@@ -31,10 +31,17 @@ type RepoTree struct {
 	Branches      []string    `json:"branches"`
 	Files         []FileEntry `json:"files"`
 	Truncated     bool        `json:"truncated"`
+	// CanWrite is false for repositories the current credentials cannot push
+	// to (someone else's public repo, or not signed in). The UI then offers
+	// download only.
+	CanWrite bool `json:"canWrite"`
 }
 
 type repoInfo struct {
 	DefaultBranch string `json:"default_branch"`
+	Permissions   struct {
+		Push bool `json:"push"`
+	} `json:"permissions"`
 }
 
 type branchInfo struct {
@@ -235,5 +242,6 @@ func (a *App) FetchRepoTree(repo string, gitRef string) (*RepoTree, error) {
 		Branches:      names,
 		Files:         files,
 		Truncated:     tree.Truncated,
+		CanWrite:      info.Permissions.Push,
 	}, nil
 }

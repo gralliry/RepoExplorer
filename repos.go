@@ -43,8 +43,7 @@ const reposMaxPages = 5 // 500 repositories is plenty for a picker
 //   - collaborator  someone else's repository they were added to
 //   - organization  a repository of an organisation they belong to
 //
-// All three are useful, so they are returned rather than filtered; the UI groups
-// them. Requires authentication.
+// Requires authentication.
 func (a *App) ListMyRepos() ([]RepoSummary, error) {
 	token := a.effectiveToken()
 	if token == "" {

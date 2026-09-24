@@ -78,3 +78,46 @@ func TestLiveListMyRepos(t *testing.T) {
 		}
 	}
 }
+
+// canWrite must reflect real permissions: someone else's public repository is
+// download-only, one of our own is writable.
+func TestLiveCanWrite(t *testing.T) {
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		t.Skip("设置 GITHUB_TOKEN 才会运行")
+	}
+	t.Setenv("APPDATA", t.TempDir())
+
+	app := NewApp()
+	if err := app.SaveManualToken(token); err != nil {
+		t.Fatalf("保存 Token 失败：%v", err)
+	}
+
+	other, err := app.FetchRepoTree("octocat/Hello-World", "")
+	if err != nil {
+		t.Fatalf("FetchRepoTree(octocat/Hello-World): %v", err)
+	}
+	if other.CanWrite {
+		t.Error("octocat/Hello-World 是别人的公开仓库，不该判定为可写")
+	}
+	t.Logf("octocat/Hello-World  canWrite=%v（期望 false）", other.CanWrite)
+
+	repos, err := app.ListMyRepos()
+	if err != nil {
+		t.Fatalf("ListMyRepos: %v", err)
+	}
+	for _, r := range repos {
+		if r.Category != "owner" {
+			continue
+		}
+		mine, err := app.FetchRepoTree(r.FullName, "")
+		if err != nil {
+			t.Fatalf("FetchRepoTree(%s): %v", r.FullName, err)
+		}
+		if !mine.CanWrite {
+			t.Errorf("%s 是自己的仓库，应该判定为可写", r.FullName)
+		}
+		t.Logf("%s  canWrite=%v（期望 true）", r.FullName, mine.CanWrite)
+		break
+	}
+}
