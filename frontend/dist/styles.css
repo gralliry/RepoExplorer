@@ -261,12 +261,11 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
   gap: 8px;
   width: 100%;
   padding: 6px 9px;
-  text-align: left;
-  background: #fff;
+  color: var(--text);
+  background: #f7f8fa;
   border: 1px solid var(--border);
   border-radius: 8px;
 }
-.repo-display:hover:not(:disabled) { border-color: var(--accent); background: #fff; }
 .repo-display > #repo-name {
   flex: 1;
   min-width: 0;
@@ -274,7 +273,6 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.repo-display-hint { flex: none; font-size: 11px; color: var(--muted); }
 
 .modal.open-modal { width: 560px; }
 .open-section { display: flex; flex-direction: column; gap: 8px; }

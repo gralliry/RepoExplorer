@@ -11,7 +11,6 @@ const api = () => window.go.main.App;
 const rt = () => window.runtime;
 
 const $ = (id) => document.getElementById(id);
-const repoDisplay = $('repo-display');
 const repoNameEl = $('repo-name');
 const refEl = $('ref');
 const loadBtn = $('load');
@@ -1255,7 +1254,6 @@ function renderMyRepos() {
 
 /* ------------------------------------------------------------------ chrome */
 loadBtn.onclick = openOpenModal;
-repoDisplay.onclick = openOpenModal;
 
 $('open-close').onclick = () => closeModal('open-modal');
 $('open-modal').addEventListener('click', (e) => { if (e.target === $('open-modal')) closeModal('open-modal'); });
