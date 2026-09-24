@@ -256,9 +256,15 @@ function openContextMenu(event, entries) {
       '-',
       { label: '上传文件…', run: () => uploadInto(currentPath, 'files'), disabled: ro },
       { label: '上传文件夹…', run: () => uploadInto(currentPath, 'folder'), disabled: ro },
-      '-',
-      { label: '刷新', run: doRefresh },
     );
+    if (clipboard) {
+      items.push('-', {
+        label: `粘贴（${clipboard.paths.length} 项）`,
+        run: pasteClipboard,
+        disabled: ro,
+      });
+    }
+    items.push('-', { label: '刷新', run: doRefresh });
   } else {
     if (single && !single.dir) items.push({ label: '编辑', run: () => openEditor(single), disabled: ro });
     if (single && single.dir) {
@@ -274,6 +280,14 @@ function openContextMenu(event, entries) {
     items.push({
       label: entries.length > 1 ? `下载（${entries.length} 项）` : '下载',
       run: downloadSelection,
+    });
+    items.push('-');
+    items.push({ label: '复制', run: () => copySelection('copy'), disabled: ro });
+    items.push({ label: '剪切', run: () => copySelection('cut'), disabled: ro });
+    items.push({
+      label: clipboard ? `粘贴（${clipboard.paths.length} 项）` : '粘贴',
+      run: pasteClipboard,
+      disabled: ro || !clipboard,
     });
     items.push('-');
     if (single) items.push({ label: '重命名…', run: () => startInlineRename(single), disabled: ro });
@@ -486,7 +500,9 @@ function renderGrid(entries, container) {
 
 function buildRow(entry) {
   const row = document.createElement('div');
-  row.className = 'item' + (selection.has(entry.path) ? ' selected' : '');
+  row.className = 'item'
+    + (selection.has(entry.path) ? ' selected' : '')
+    + (activeCutSet && activeCutSet.has(entry.path) ? ' cut' : '');
   row.__entry = entry;
   row.draggable = true;
 
@@ -516,7 +532,9 @@ function buildRow(entry) {
 
 function buildTile(entry) {
   const tile = document.createElement('div');
-  tile.className = 'tile' + (selection.has(entry.path) ? ' selected' : '');
+  tile.className = 'tile'
+    + (selection.has(entry.path) ? ' selected' : '')
+    + (activeCutSet && activeCutSet.has(entry.path) ? ' cut' : '');
   tile.__entry = entry;
   tile.draggable = true;
 
@@ -761,6 +779,8 @@ async function load() {
     refEl.value = tree.git_ref;
 
     buildIndex();
+    clipboard = null;          // the clipboard belongs to the previous repository
+    paintClipboard();
     history = [''];
     histIndex = 0;
     navigate('', false);
@@ -798,17 +818,110 @@ async function doRefresh() {
 
 async function runMutation(label, fn) {
   if (!info) return toast('请先打开仓库', true);
-  if (!requireWrite()) return;
+  if (!requireWrite()) return false;
 
   setBusy(true, label);
   try {
     const result = await fn();
     await refreshTree();
     toast(`已提交：${result.message}`);
+    return true;
   } catch (err) {
     toast(errText(err), true);
+    return false;
   } finally {
     setBusy(false);
+  }
+}
+
+/* ------------------------------------------------------------- clipboard */
+// An internal clipboard, exactly like a file manager: Ctrl+C / Ctrl+X mark repo
+// paths, Ctrl+V writes them into the current folder.
+let clipboard = null;        // { mode: 'copy' | 'cut', paths: [...] }
+let activeCutSet = null;     // paths drawn dimmed because they were cut
+
+function existsInRepo(p) {
+  return filePaths.has(p) || dirStats.has(p);
+}
+
+// "name - 副本.txt", "name - 副本 (2).txt", … like Explorer never overwrites.
+function uniqueRepoPath(target) {
+  if (!existsInRepo(target)) return target;
+
+  const dir = dirname(target);
+  const name = basename(target);
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+
+  let candidate = joinPath(dir, `${stem} - 副本${ext}`);
+  let n = 2;
+  while (existsInRepo(candidate)) {
+    candidate = joinPath(dir, `${stem} - 副本 (${n})${ext}`);
+    n++;
+  }
+  return candidate;
+}
+
+function paintClipboard() {
+  activeCutSet = clipboard && clipboard.mode === 'cut' ? new Set(clipboard.paths) : null;
+}
+
+function copySelection(mode) {
+  if (!selection.size) {
+    return toast(`请先选中要${mode === 'copy' ? '复制' : '剪切'}的文件`, true);
+  }
+  clipboard = { mode, paths: [...selection] };
+  paintClipboard();
+  render();
+  toast(`已${mode === 'copy' ? '复制' : '剪切'} ${clipboard.paths.length} 项`);
+}
+
+async function pasteClipboard() {
+  if (!info) return toast('请先打开仓库', true);
+  if (!clipboard || !clipboard.paths.length) return toast('剪贴板是空的', true);
+  if (!requireWrite()) return;
+
+  const isCut = clipboard.mode === 'cut';
+  const moves = [];
+
+  for (const p of clipboard.paths) {
+    if (filePaths.has(p)) {
+      moves.push({ from: p, to: uniqueRepoPath(joinPath(currentPath, basename(p))) });
+      continue;
+    }
+    // A folder: cannot be pasted inside itself.
+    if (currentPath === p || currentPath.startsWith(`${p}/`)) {
+      return toast(`不能把「${basename(p)}」粘贴到它自己里面`, true);
+    }
+    const targetDir = uniqueRepoPath(joinPath(currentPath, basename(p)));
+    const prefix = `${p}/`;
+    for (const f of info.files) {
+      if (!f.path.startsWith(prefix)) continue;
+      moves.push({ from: f.path, to: `${targetDir}/${f.path.slice(prefix.length)}` });
+    }
+  }
+
+  if (!moves.length) return toast('没有可粘贴的内容', true);
+
+  const ok = await confirmModal({
+    title: isCut ? '移动到此处' : '复制到此处',
+    message: `${isCut ? '移动' : '复制'} ${moves.length} 个文件到 ${currentPath || '仓库根目录'}（1 个提交）：`,
+    items: moves.map((m) => ({ text: `${m.from}  →  ${m.to}`, cls: isCut ? '' : 'add' })),
+    okText: isCut ? '确认移动' : '确认复制',
+  });
+  if (!ok) return;
+
+  const done = await runMutation(isCut ? '正在移动…' : '正在复制…', () => (
+    isCut
+      ? api().MovePaths(repoId(), info.git_ref, moves, '')
+      : api().CopyPaths(repoId(), info.git_ref, moves, '')
+  ));
+
+  if (done && isCut) {
+    clipboard = null;   // a cut is consumed once it lands
+    paintClipboard();
+    render();
   }
 }
 
@@ -1343,6 +1456,9 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'F2') { e.preventDefault(); const p = [...selection][0]; if (p) startInlineRename(entryMap.get(p) || entryFromPath(p)); }
   else if (e.key === 'Delete') { e.preventDefault(); if (selection.size) confirmDeletePaths([...selection]); }
   else if (e.key === 'Enter') { e.preventDefault(); const p = [...selection][0]; if (p) openEntry(entryMap.get(p) || entryFromPath(p)); }
+  else if (e.ctrlKey && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelection('copy'); }
+  else if (e.ctrlKey && e.key.toLowerCase() === 'x') { e.preventDefault(); copySelection('cut'); }
+  else if (e.ctrlKey && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteClipboard(); }
   else if (e.ctrlKey && e.key.toLowerCase() === 'a') {
     e.preventDefault();
     selection = new Set(currentEntries.map((x) => x.path));

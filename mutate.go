@@ -374,6 +374,75 @@ func dirOf(p string) string {
 	return ""
 }
 
+// CopyPaths duplicates files in a single commit. Contents are not re-uploaded:
+// the new paths simply reuse the existing blob shas, so copying a 10 MB file
+// costs the same as copying a 10 byte one. Folder copies are expanded by the
+// caller into one entry per file.
+func (a *App) CopyPaths(repo, branch string, copies []PathMove, message string) (*CommitResult, error) {
+	owner, name, err := parseRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+
+	type pair struct{ from, to string }
+	list := make([]pair, 0, len(copies))
+	seenTargets := make(map[string]bool, len(copies))
+
+	for _, c := range copies {
+		from, err := cleanRepoPath(c.From)
+		if err != nil {
+			return nil, err
+		}
+		to, err := cleanRepoPath(c.To)
+		if err != nil {
+			return nil, err
+		}
+		if from == to {
+			continue
+		}
+		if seenTargets[to] {
+			return nil, fmt.Errorf("有多个文件的目标路径重复：%s", to)
+		}
+		seenTargets[to] = true
+		list = append(list, pair{from: from, to: to})
+	}
+	if len(list) == 0 {
+		return nil, fmt.Errorf("没有需要复制的文件")
+	}
+
+	plan := func(index map[string]remoteEntry) ([]treeChange, error) {
+		changes := make([]treeChange, 0, len(list))
+		for _, p := range list {
+			src, ok := index[p.from]
+			if !ok {
+				return nil, fmt.Errorf("源文件不存在：%s", p.from)
+			}
+			if _, exists := index[p.to]; exists {
+				return nil, fmt.Errorf("目标已存在：%s", p.to)
+			}
+			mode := src.Mode
+			if mode == "" {
+				mode = "100644"
+			}
+			// Reuse the blob: no content is transferred.
+			changes = append(changes, treeChange{Path: p.to, Mode: mode, BlobSHA: src.SHA})
+		}
+		return changes, nil
+	}
+
+	describe := func(map[string]remoteEntry) string {
+		if strings.TrimSpace(message) != "" {
+			return message
+		}
+		if len(list) == 1 {
+			return fmt.Sprintf("Copy %s to %s", list[0].from, list[0].to)
+		}
+		return fmt.Sprintf("Copy %d files", len(list))
+	}
+
+	return a.commitChanges(owner, name, branch, describe, plan)
+}
+
 // PlanUpload expands picked local paths into the repo paths they will become,
 // so the UI can show a confirmation list before anything is written.
 func (a *App) PlanUpload(repoDir string, localPaths []string) ([]UploadItem, error) {

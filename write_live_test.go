@@ -269,3 +269,65 @@ func TestLiveWriteRequiresAuth(t *testing.T) {
 		t.Errorf("错误信息应该提示需要登录，实际：%v", err)
 	}
 }
+
+// Copying must duplicate content without touching the source.
+func TestLiveWriteCopy(t *testing.T) {
+	app, repo, _ := liveWriteEnv(t)
+	const branch = "main"
+	const prefix = "livetest/"
+
+	purge := func() {
+		if paths := liveTreePaths(t, app, repo, branch, prefix); len(paths) > 0 {
+			app.DeletePaths(repo, branch, paths, "chore: clean scratch")
+		}
+	}
+	purge()
+	defer purge()
+
+	if _, err := app.SaveFile(repo, branch, prefix+"a.txt", "hello copy\n", ""); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+
+	res, err := app.CopyPaths(repo, branch, []PathMove{
+		{From: prefix + "a.txt", To: prefix + "b.txt"},
+	}, "")
+	if err != nil {
+		t.Fatalf("CopyPaths: %v", err)
+	}
+	if res.Message != "Copy "+prefix+"a.txt to "+prefix+"b.txt" {
+		t.Errorf("commit message = %q", res.Message)
+	}
+
+	orig, err := app.ReadFile(repo, branch, prefix+"a.txt")
+	if err != nil {
+		t.Fatalf("源文件读取失败（复制不该删掉它）：%v", err)
+	}
+	dup, err := app.ReadFile(repo, branch, prefix+"b.txt")
+	if err != nil {
+		t.Fatalf("副本读取失败：%v", err)
+	}
+	if dup.Content != orig.Content {
+		t.Errorf("副本内容不一致：%q vs %q", dup.Content, orig.Content)
+	}
+	t.Logf("复制成功，内容一致：%q", dup.Content)
+
+	// Copying a folder's contents by hand (the UI expands folders this way).
+	if _, err := app.SaveFile(repo, branch, prefix+"dir/x.txt", "x\n", ""); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	if _, err := app.CopyPaths(repo, branch, []PathMove{
+		{From: prefix + "dir/x.txt", To: prefix + "dir2/x.txt"},
+	}, ""); err != nil {
+		t.Fatalf("CopyPaths(文件夹内文件): %v", err)
+	}
+	if _, err := app.ReadFile(repo, branch, prefix+"dir2/x.txt"); err != nil {
+		t.Errorf("目录复制后读取失败：%v", err)
+	}
+
+	// Overwriting is refused rather than silently clobbering.
+	if _, err := app.CopyPaths(repo, branch, []PathMove{
+		{From: prefix + "a.txt", To: prefix + "b.txt"},
+	}, ""); err == nil {
+		t.Error("目标已存在时复制应该被拒绝")
+	}
+}
