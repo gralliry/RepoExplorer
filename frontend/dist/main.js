@@ -1,8 +1,11 @@
 /* Frontend for RepoExplorer (Wails / Go backend).
  *
- * The Go side owns authentication (OAuth device flow or a manual token) and all
- * writes; every write goes through the Git Data API so an operation like
- * "rename a folder with 200 files" lands as ONE commit.
+ * The UI deliberately mirrors Windows Explorer: an address bar, a content pane
+ * showing the current folder, click / ctrl+click / shift+click selection, F2
+ * inline rename, drag & drop to move, and a status bar.
+ *
+ * All writes go through the Go side, which turns each operation into ONE commit
+ * via the Git Data API.
  */
 const api = () => window.go.main.App;
 const rt = () => window.runtime;
@@ -12,30 +15,31 @@ const repoEl = $('repo');
 const refEl = $('ref');
 const loadBtn = $('load');
 const filterEl = $('filter');
-const treeEl = $('tree');
-const repoMetaEl = $('repo-meta');
-const statCountEl = $('stat-count');
-const statSizeEl = $('stat-size');
-const destEl = $('dest');
-const pickBtn = $('pick');
-const downloadBtn = $('download');
-const barEl = $('bar');
-const barTextEl = $('bar-text');
-const logEl = $('log');
+const listEl = $('list');
+const crumbEl = $('breadcrumb');
 const toastEl = $('toast');
 const authBtn = $('auth-btn');
 const authModal = $('auth-modal');
 const ctxMenu = $('ctx-menu');
 
-let info = null;                 // RepoTree returned by the backend
-let root = null;                 // nested tree built from info.files
-let dirPaths = new Set();        // every directory path in the tree
-const sizes = new Map();         // file path -> size
-const selected = new Set();      // selected file paths
-const expanded = new Set();      // expanded directory paths
+/* -------------------------------------------------------------- app state */
+let info = null;                  // RepoTree from Go
+let currentPath = '';             // "" = repository root
+let history = [];
+let histIndex = -1;
+let selection = new Set();        // selected paths in the current view
+let anchorPath = null;            // for shift-click ranges
+let currentEntries = [];          // entries currently rendered
+let entryMap = new Map();         // path -> entry
+let sizes = new Map();            // file path -> size
+let filePaths = new Set();        // every file in the repo
+let dirStats = new Map();         // dir path -> {count, size}
+let viewMode = 'details';         // 'details' | 'icons'
+let sortKey = 'name';
+let sortAsc = true;
 let dest = '';
 let busy = false;
-let metaText = '';
+let dragging = null;              // paths being dragged
 let auth = { loggedIn: false, login: '', source: '' };
 let deviceFlow = null;
 
@@ -56,19 +60,16 @@ function fmtSize(n) {
   return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
-function basename(p) {
-  const i = p.lastIndexOf('/');
-  return i >= 0 ? p.slice(i + 1) : p;
-}
-
-function dirname(p) {
-  const i = p.lastIndexOf('/');
-  return i >= 0 ? p.slice(0, i) : '';
-}
-
+function basename(p) { const i = p.lastIndexOf('/'); return i >= 0 ? p.slice(i + 1) : p; }
+function dirname(p) { const i = p.lastIndexOf('/'); return i >= 0 ? p.slice(0, i) : ''; }
 const joinPath = (dir, name) => (dir ? `${dir}/${name}` : name);
-
 const repoId = () => (info ? `${info.owner}/${info.repo}` : '');
+
+function fileType(name) {
+  const i = name.lastIndexOf('.');
+  if (i <= 0) return '文件';
+  return `${name.slice(i + 1).toUpperCase()} 文件`;
+}
 
 let toastTimer = null;
 function toast(msg, isError = false) {
@@ -78,19 +79,8 @@ function toast(msg, isError = false) {
   toastTimer = setTimeout(() => { toastEl.className = 'toast'; }, 3600);
 }
 
-function appendLog(text) {
-  const line = document.createElement('div');
-  line.textContent = text;
-  line.title = text;
-  logEl.appendChild(line);
-  while (logEl.childElementCount > 400) logEl.removeChild(logEl.firstChild);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
 function copyText(text) {
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    return navigator.clipboard.writeText(text);
-  }
+  if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
   return new Promise((resolve, reject) => {
     const ta = document.createElement('textarea');
     ta.value = text;
@@ -105,11 +95,9 @@ function copyText(text) {
 }
 
 /* ------------------------------------------------------------ generic UI */
-function openModal(id) { $(id).classList.remove('hidden'); }
-function closeModal(id) { $(id).classList.add('hidden'); }
+const openModal = (id) => $(id).classList.remove('hidden');
+const closeModal = (id) => $(id).classList.add('hidden');
 
-// promptModal resolves with the entered string, or null when cancelled. When
-// `extra` is given it resolves with {value, extra}.
 function promptModal({ title, label, hint = '', value = '', placeholder = '', extra = null, okText = '确定' }) {
   return new Promise((resolve) => {
     $('prompt-title').textContent = title;
@@ -149,7 +137,10 @@ function promptModal({ title, label, hint = '', value = '', placeholder = '', ex
     };
     $('prompt-cancel').onclick = () => finish(null);
     $('prompt-close').onclick = () => finish(null);
-    input.onkeydown = (e) => { if (e.key === 'Enter') $('prompt-ok').click(); };
+    input.onkeydown = (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') $('prompt-ok').click();
+    };
 
     openModal('prompt-modal');
     input.focus();
@@ -191,7 +182,6 @@ function confirmModal({ title, message, items = [], okText = '确认' }) {
     $('confirm-ok').onclick = () => finish(true);
     $('confirm-cancel').onclick = () => finish(false);
     $('confirm-close').onclick = () => finish(false);
-
     openModal('confirm-modal');
   });
 }
@@ -213,7 +203,6 @@ function editorModal({ title, content, hint = '' }) {
     $('editor-save').onclick = () => finish(area.value);
     $('editor-cancel').onclick = () => finish(null);
     $('editor-close').onclick = () => finish(null);
-
     openModal('editor-modal');
     area.focus();
   });
@@ -238,92 +227,82 @@ function showCtxMenu(x, y, items) {
     ctxMenu.appendChild(el);
   }
   ctxMenu.classList.remove('hidden');
-
   const rect = ctxMenu.getBoundingClientRect();
   ctxMenu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
   ctxMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
 }
 
-function openContextMenu(event, node) {
+function openContextMenu(event, entries) {
   const items = [];
+  const single = entries.length === 1 ? entries[0] : null;
 
-  if (!node) {
+  if (!entries.length) {
     items.push(
-      { label: '新建文件…', run: () => promptNewFile('') },
-      { label: '新建文件夹…', run: () => promptNewFolder('') },
-      { label: '上传文件到根目录…', run: () => uploadInto('', 'files') },
-      { label: '上传文件夹到根目录…', run: () => uploadInto('', 'folder') },
-    );
-  } else if (node.dir) {
-    items.push(
-      { label: '在此新建文件…', run: () => promptNewFile(node.path) },
-      { label: '在此新建文件夹…', run: () => promptNewFolder(node.path) },
-      { label: '上传到此…', run: () => uploadInto(node.path, 'files') },
-      { label: '上传文件夹到此…', run: () => uploadInto(node.path, 'folder') },
+      { label: '新建文件…', run: () => promptNewFile(currentPath) },
+      { label: '新建文件夹…', run: () => promptNewFolder(currentPath) },
       '-',
-      { label: '重命名…', run: () => promptRename(node) },
-      { label: '移动到…', run: () => promptMove(node) },
-      { label: '删除', danger: true, run: () => confirmDelete([node]) },
+      { label: '上传文件…', run: () => uploadInto(currentPath, 'files') },
+      { label: '上传文件夹…', run: () => uploadInto(currentPath, 'folder') },
       '-',
-      { label: '下载此文件夹', run: () => selectAndDownload(node) },
+      { label: '刷新', run: doRefresh },
     );
   } else {
-    items.push(
-      { label: '编辑', run: () => openEditor(node) },
-      { label: '下载', run: () => selectAndDownload(node) },
-      '-',
-      { label: '重命名…', run: () => promptRename(node) },
-      { label: '移动到…', run: () => promptMove(node) },
-      { label: '删除', danger: true, run: () => confirmDelete([node]) },
-    );
+    if (single && !single.dir) items.push({ label: '编辑', run: () => openEditor(single) });
+    if (single && single.dir) {
+      items.push(
+        { label: '打开', run: () => navigate(single.path) },
+        '-',
+        { label: '在此新建文件…', run: () => promptNewFile(single.path) },
+        { label: '在此新建文件夹…', run: () => promptNewFolder(single.path) },
+        { label: '上传到此…', run: () => uploadInto(single.path, 'files') },
+        '-',
+      );
+    }
+    items.push({
+      label: entries.length > 1 ? `下载（${entries.length} 项）` : '下载',
+      run: downloadSelection,
+    });
+    items.push('-');
+    if (single) items.push({ label: '重命名…', run: () => startInlineRename(single) });
+    items.push({ label: '移动到…', run: () => promptMove(entries) });
+    items.push('-');
+    items.push({ label: '删除', danger: true, run: () => confirmDeleteEntries(entries) });
   }
-
   showCtxMenu(event.clientX, event.clientY, items);
 }
 
-/* ------------------------------------------------------------------- auth */
+/* --------------------------------------------------------- auth */
 function renderAuthButton() {
   authBtn.classList.toggle('on', auth.loggedIn);
-  if (auth.loggedIn && auth.source === 'oauth') {
-    authBtn.textContent = `● @${auth.login || '已登录'}`;
-  } else if (auth.loggedIn) {
-    authBtn.textContent = '● Token 已设置';
-  } else {
-    authBtn.textContent = '登录 GitHub';
-  }
+  if (auth.loggedIn && auth.source === 'oauth') authBtn.textContent = `● @${auth.login || '已登录'}`;
+  else if (auth.loggedIn) authBtn.textContent = '● Token 已设置';
+  else authBtn.textContent = '登录 GitHub';
 }
 
 async function refreshAuth() {
-  try {
-    auth = await api().GetAuth();
-  } catch (err) {
-    auth = { loggedIn: false, login: '', source: '' };
-  }
+  try { auth = await api().GetAuth(); }
+  catch (err) { auth = { loggedIn: false, login: '', source: '' }; }
   renderAuthButton();
 }
 
 function showAuthView(name) {
-  for (const view of ['user', 'code', 'setup']) {
-    $('auth-view-' + view).classList.toggle('hidden', view !== name);
-  }
+  for (const view of ['user', 'code', 'setup']) $('auth-view-' + view).classList.toggle('hidden', view !== name);
 }
 
 function openAuthModal() {
   authModal.classList.remove('hidden');
   if (auth.loggedIn) {
-    $('auth-user-name').textContent =
-      auth.source === 'oauth' ? `@${auth.login || '(未知用户)'}` : '手动 Token';
-    $('auth-user-source').textContent =
-      auth.source === 'oauth'
-        ? '已通过 GitHub OAuth 登录，凭据已保存到本地'
-        : '正在使用手动填写的 Personal Access Token';
+    $('auth-user-name').textContent = auth.source === 'oauth' ? `@${auth.login || '(未知用户)'}` : '手动 Token';
+    $('auth-user-source').textContent = auth.source === 'oauth'
+      ? '已通过 GitHub OAuth 登录，凭据已保存到本地'
+      : '正在使用手动填写的 Personal Access Token';
     showAuthView('user');
   } else {
     showAuthView('setup');
   }
 }
 
-function closeAuthModal() { authModal.classList.add('hidden'); }
+const closeAuthModal = () => authModal.classList.add('hidden');
 
 function openExternal(url) {
   if (!url) return;
@@ -337,227 +316,379 @@ function requireLogin() {
   return false;
 }
 
-/* ------------------------------------------------------------- tree model */
-const mkNode = (name, path, dir) => ({ name, path, dir, children: new Map(), size: 0, count: 0 });
+/* ------------------------------------------------------------ repo model */
+function buildIndex() {
+  sizes = new Map();
+  filePaths = new Set();
+  dirStats = new Map();
 
-function buildTree(files) {
-  const rootNode = mkNode('', '', true);
-  for (const file of files) {
-    const parts = file.path.split('/');
-    let node = rootNode;
+  for (const f of info.files) {
+    sizes.set(f.path, f.size);
+    filePaths.add(f.path);
+
+    const parts = f.path.split('/');
     let acc = '';
-    parts.forEach((part, idx) => {
-      acc = acc ? `${acc}/${part}` : part;
-      const isLeaf = idx === parts.length - 1;
-      let child = node.children.get(part);
-      if (!child) {
-        child = mkNode(part, acc, !isLeaf);
-        node.children.set(part, child);
-      }
-      node = child;
-    });
-    node.size = file.size;
-    sizes.set(file.path, file.size);
-  }
-  compute(rootNode);
-  return rootNode;
-}
-
-function compute(node) {
-  if (!node.dir) { node.count = 1; return { count: 1, size: node.size }; }
-  let count = 0;
-  let size = 0;
-  for (const child of node.children.values()) {
-    const r = compute(child);
-    count += r.count;
-    size += r.size;
-  }
-  node.count = count;
-  node.size = size;
-  node.sorted = [...node.children.values()].sort((a, b) =>
-    a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1);
-  return { count, size };
-}
-
-function collectFiles(node, out) {
-  if (!node.dir) { out.push(node.path); return; }
-  for (const child of node.children.values()) collectFiles(child, out);
-}
-
-function collectDirPaths(node, out) {
-  for (const child of node.children.values()) {
-    if (child.dir) { out.push(child.path); collectDirPaths(child, out); }
-  }
-  return out;
-}
-
-function expandToFiles(nodes) {
-  const set = new Set();
-  for (const node of nodes) {
-    if (node.dir) {
-      const out = [];
-      collectFiles(node, out);
-      out.forEach((f) => set.add(f));
-    } else {
-      set.add(node.path);
+    for (let i = 0; i < parts.length - 1; i++) {
+      acc = acc ? `${acc}/${parts[i]}` : parts[i];
+      let s = dirStats.get(acc);
+      if (!s) { s = { count: 0, size: 0 }; dirStats.set(acc, s); }
+      s.count += 1;
+      s.size += f.size;
     }
   }
-  return [...set];
 }
 
-/* -------------------------------------------------------------- rendering */
+const dirExists = (p) => p === '' || dirStats.has(p);
+
+function entryFromPath(p) {
+  if (filePaths.has(p)) {
+    return { name: basename(p), path: p, dir: false, size: sizes.get(p) || 0, type: fileType(basename(p)) };
+  }
+  const st = dirStats.get(p) || { count: 0, size: 0 };
+  return { name: basename(p), path: p, dir: true, size: st.size, count: st.count, type: '文件夹' };
+}
+
+function entriesOf(dir) {
+  const prefix = dir ? `${dir}/` : '';
+  const map = new Map();
+
+  for (const f of info.files) {
+    if (!f.path.startsWith(prefix)) continue;
+    const rest = f.path.slice(prefix.length);
+    if (!rest) continue;
+
+    const slash = rest.indexOf('/');
+    if (slash === -1) {
+      map.set(rest, { name: rest, path: f.path, dir: false, size: f.size, type: fileType(rest) });
+    } else {
+      const name = rest.slice(0, slash);
+      if (!map.has(name)) map.set(name, entryFromPath(prefix + name));
+    }
+  }
+
+  const list = [...map.values()];
+  sortEntries(list);
+  return list;
+}
+
+function sortEntries(list) {
+  const dir = sortAsc ? 1 : -1;
+  list.sort((a, b) => {
+    if (a.dir !== b.dir) return a.dir ? -1 : 1;   // folders always first
+    let r;
+    if (sortKey === 'size') r = a.size - b.size;
+    else if (sortKey === 'type') r = a.type.localeCompare(b.type, 'zh') || a.name.localeCompare(b.name, 'zh');
+    else r = a.name.localeCompare(b.name, 'zh');
+    return r * dir;
+  });
+}
+
+/* ------------------------------------------------------------ rendering */
 function render() {
-  if (!root) {
-    treeEl.innerHTML = '<div class="empty">输入仓库后点击“加载目录”<br />右键文件或文件夹可以进行增删改</div>';
+  renderBreadcrumb();
+  listEl.innerHTML = '';
+  currentEntries = [];
+  entryMap = new Map();
+
+  if (!info) {
+    listEl.innerHTML = '<div class="empty">输入仓库后点「打开仓库」<br />加载完成后，双击文件夹进入，双击文件编辑</div>';
+    updateStatus();
     return;
   }
+
   const q = filterEl.value.trim().toLowerCase();
-  treeEl.innerHTML = '';
-  if (q) { renderFiltered(q); return; }
-  if (metaText) repoMetaEl.textContent = metaText;
-  renderChildren(root, treeEl, 0);
-}
-
-function renderChildren(node, container, depth) {
-  for (const child of node.sorted || []) {
-    container.appendChild(buildRow(child, depth));
-    if (child.dir && expanded.has(child.path)) {
-      const box = document.createElement('div');
-      container.appendChild(box);
-      renderChildren(child, box, depth + 1);
-    }
+  if (q) {
+    const matches = info.files
+      .filter((f) => f.path.toLowerCase().includes(q))
+      .sort((a, b) => a.path.localeCompare(b.path))
+      .slice(0, 2000);
+    currentEntries = matches.map((f) => ({
+      name: f.path, path: f.path, dir: false, size: f.size, type: fileType(basename(f.path)),
+    }));
+  } else {
+    currentEntries = entriesOf(currentPath);
   }
+  entryMap = new Map(currentEntries.map((e) => [e.path, e]));
+
+  if (!currentEntries.length) {
+    listEl.innerHTML = q ? '<div class="empty">没有匹配的文件</div>' : '<div class="empty">这个文件夹是空的</div>';
+    updateStatus();
+    return;
+  }
+
+  if (viewMode === 'icons') renderGrid(currentEntries, listEl);
+  else renderDetails(currentEntries, listEl);
+
+  updateStatus();
 }
 
-function buildRow(node, depth) {
+function renderDetails(entries, container) {
+  const head = document.createElement('div');
+  head.className = 'list-head';
+  for (const [key, label] of [['name', '名称'], ['size', '大小'], ['type', '类型']]) {
+    const cell = document.createElement('div');
+    cell.textContent = label + (sortKey === key ? (sortAsc ? ' ▲' : ' ▼') : '');
+    if (sortKey === key) cell.classList.add('sorted');
+    cell.onclick = () => {
+      if (sortKey === key) sortAsc = !sortAsc;
+      else { sortKey = key; sortAsc = true; }
+      render();
+    };
+    head.appendChild(cell);
+  }
+  container.appendChild(head);
+
+  const body = document.createElement('div');
+  for (const entry of entries) body.appendChild(buildRow(entry));
+  container.appendChild(body);
+}
+
+function renderGrid(entries, container) {
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+  for (const entry of entries) grid.appendChild(buildTile(entry));
+  container.appendChild(grid);
+}
+
+function buildRow(entry) {
   const row = document.createElement('div');
-  row.className = 'row ' + (node.dir ? 'dir' : 'file');
-  row.style.paddingLeft = `${10 + depth * 15}px`;
-  row.__node = node;
+  row.className = 'item' + (selection.has(entry.path) ? ' selected' : '');
+  row.__entry = entry;
+  row.draggable = true;
 
-  const cb = document.createElement('input');
-  cb.type = 'checkbox';
-  cb.className = 'cb';
-
-  const twisty = document.createElement('span');
-  twisty.className = 'twisty';
-  twisty.textContent = node.dir ? (expanded.has(node.path) ? '▾' : '▸') : '';
-  if (node.dir) twisty.onclick = (e) => { e.stopPropagation(); toggleExpand(node); };
-
+  const name = document.createElement('div');
+  name.className = 'col-name';
   const icon = document.createElement('span');
   icon.className = 'icon';
-  icon.textContent = node.dir ? (expanded.has(node.path) ? '📂' : '📁') : '📄';
+  icon.textContent = entry.dir ? '📁' : '📄';
+  const label = document.createElement('span');
+  label.className = 'label';
+  label.textContent = entry.name;
+  label.title = entry.path;
+  name.append(icon, label);
 
-  const name = document.createElement('span');
-  name.className = 'name';
-  name.textContent = node.name;
-  name.title = node.path;
+  const size = document.createElement('div');
+  size.className = 'col-size';
+  size.textContent = entry.dir ? `${entry.count} 项` : fmtSize(entry.size);
 
-  const size = document.createElement('span');
-  size.className = 'size';
-  size.textContent = node.dir ? `${node.count} 项 · ${fmtSize(node.size)}` : fmtSize(node.size);
+  const type = document.createElement('div');
+  type.className = 'col-type';
+  type.textContent = entry.type;
 
-  if (node.dir) {
-    const files = [];
-    collectFiles(node, files);
-    const picked = files.reduce((n, f) => n + (selected.has(f) ? 1 : 0), 0);
-    cb.checked = files.length > 0 && picked === files.length;
-    cb.indeterminate = picked > 0 && picked < files.length;
-    cb.onchange = () => { toggleDir(node, cb.checked); refresh(); };
-    row.onclick = (e) => {
-      if (e.target === cb || e.target === twisty) return;
-      toggleExpand(node);
-    };
-  } else {
-    cb.checked = selected.has(node.path);
-    cb.onchange = () => {
-      if (cb.checked) selected.add(node.path);
-      else selected.delete(node.path);
-      refresh();
-    };
-    row.ondblclick = () => openEditor(node);
-  }
-
-  row.append(cb, twisty, icon, name, size);
+  row.append(name, size, type);
+  attachItemEvents(row, entry);
   return row;
 }
 
-function renderFiltered(q) {
-  const matches = info.files.filter((f) => f.path.toLowerCase().includes(q));
-  if (!matches.length) {
-    treeEl.innerHTML = '<div class="empty">没有匹配的文件</div>';
+function buildTile(entry) {
+  const tile = document.createElement('div');
+  tile.className = 'tile' + (selection.has(entry.path) ? ' selected' : '');
+  tile.__entry = entry;
+  tile.draggable = true;
+
+  const icon = document.createElement('div');
+  icon.className = 'tile-icon';
+  icon.textContent = entry.dir ? '📁' : '📄';
+
+  const label = document.createElement('div');
+  label.className = 'label tile-label';
+  label.textContent = entry.name;
+  label.title = entry.path;
+
+  tile.append(icon, label);
+  attachItemEvents(tile, entry);
+  return tile;
+}
+
+function attachItemEvents(el, entry) {
+  el.onmousedown = (e) => {
+    if (e.button !== 0 || el.classList.contains('editing')) return;
+    selectWithModifiers(entry, e);
+  };
+  el.ondblclick = () => openEntry(entry);
+  el.oncontextmenu = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!selection.has(entry.path)) {
+      selection = new Set([entry.path]);
+      anchorPath = entry.path;
+      paintSelection();
+      updateStatus();
+    }
+    openContextMenu(e, selectionEntries());
+  };
+
+  el.ondragstart = (e) => {
+    if (!selection.has(entry.path)) {
+      selection = new Set([entry.path]);
+      anchorPath = entry.path;
+      paintSelection();
+      updateStatus();
+    }
+    dragging = [...selection];
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', dragging.join('\n'));
+  };
+  el.ondragend = () => { dragging = null; clearDropTargets(); };
+}
+
+function selectionEntries() {
+  return [...selection].map((p) => entryMap.get(p) || entryFromPath(p));
+}
+
+function paintSelection() {
+  for (const el of document.querySelectorAll('.item, .tile')) {
+    if (!el.__entry) continue;
+    el.classList.toggle('selected', selection.has(el.__entry.path));
+  }
+}
+
+function selectWithModifiers(entry, e) {
+  if (e.ctrlKey || e.metaKey) {
+    if (selection.has(entry.path)) selection.delete(entry.path);
+    else { selection.add(entry.path); anchorPath = entry.path; }
+  } else if (e.shiftKey && anchorPath) {
+    const list = currentEntries.map((x) => x.path);
+    const a = list.indexOf(anchorPath);
+    const b = list.indexOf(entry.path);
+    if (a >= 0 && b >= 0) {
+      selection.clear();
+      const [lo, hi] = a <= b ? [a, b] : [b, a];
+      for (let i = lo; i <= hi; i++) selection.add(list[i]);
+    } else {
+      selection = new Set([entry.path]);
+    }
+  } else {
+    selection = new Set([entry.path]);
+    anchorPath = entry.path;
+  }
+  paintSelection();
+  updateStatus();
+}
+
+function openEntry(entry) {
+  if (entry.dir) navigate(entry.path);
+  else openEditor(entry);
+}
+
+/* -------------------------------------------------------------- navigation */
+function navigate(path, push = true) {
+  currentPath = path || '';
+  if (!dirExists(currentPath)) currentPath = '';
+
+  if (push && history[histIndex] !== currentPath) {
+    history = history.slice(0, histIndex + 1);
+    history.push(currentPath);
+    histIndex = history.length - 1;
+  }
+
+  selection = new Set();
+  anchorPath = null;
+  filterEl.value = '';
+  render();
+  updateNavButtons();
+}
+
+function goBack() { if (histIndex > 0) { histIndex--; navigate(history[histIndex], false); } }
+function goForward() { if (histIndex < history.length - 1) { histIndex++; navigate(history[histIndex], false); } }
+function goUp() { if (currentPath) navigate(dirname(currentPath)); }
+
+function updateNavButtons() {
+  $('nav-back').disabled = histIndex <= 0;
+  $('nav-forward').disabled = histIndex >= history.length - 1;
+  $('nav-up').disabled = !currentPath;
+}
+
+function renderBreadcrumb() {
+  crumbEl.innerHTML = '';
+  const rootLabel = info ? `${info.owner}/${info.repo}` : '（未打开仓库）';
+  const parts = currentPath ? currentPath.split('/') : [];
+
+  const makeCrumb = (label, path, isCurrent) => {
+    const span = document.createElement('span');
+    span.className = 'crumb' + (isCurrent ? ' current' : '');
+    span.textContent = label;
+    span.onclick = (e) => { e.stopPropagation(); navigate(path); };
+    return span;
+  };
+
+  crumbEl.appendChild(makeCrumb(rootLabel, '', parts.length === 0));
+  let acc = '';
+  for (const part of parts) {
+    acc = acc ? `${acc}/${part}` : part;
+    const sep = document.createElement('span');
+    sep.className = 'crumb-sep';
+    sep.textContent = '›';
+    crumbEl.appendChild(sep);
+    crumbEl.appendChild(makeCrumb(part, acc, acc === currentPath));
+  }
+}
+
+// Clicking the empty part of the address bar lets you type a path, like Explorer.
+function startPathEdit() {
+  if (!info) return;
+  crumbEl.innerHTML = '';
+  const input = document.createElement('input');
+  input.value = currentPath ? `${info.owner}/${info.repo}/${currentPath}` : `${info.owner}/${info.repo}`;
+  crumbEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    if (!commit) { renderBreadcrumb(); return; }
+    const value = input.value.trim().replace(/^\/+|\/+$/g, '');
+    const parts = value.split('/').filter(Boolean);
+    // Accept "owner/repo/a/b", "repo/a/b" or "a/b".
+    const rest = parts.length >= 2 ? parts.slice(2).join('/') : '';
+    navigate(rest);
+  };
+  input.onclick = (e) => e.stopPropagation();
+  input.onkeydown = (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') finish(true);
+    else if (e.key === 'Escape') finish(false);
+  };
+  input.onblur = () => finish(false);
+}
+
+/* --------------------------------------------------------------- status */
+function updateStatus() {
+  const itemsEl = $('status-items');
+  if (!info) {
+    itemsEl.textContent = '尚未加载仓库';
+    $('status-dest').textContent = '';
     return;
   }
-  const frag = document.createDocumentFragment();
-  for (const f of matches.slice(0, 3000)) {
-    const row = document.createElement('div');
-    row.className = 'row file';
-    row.style.paddingLeft = '10px';
-    row.__node = { name: basename(f.path), path: f.path, dir: false };
 
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.className = 'cb';
-    cb.checked = selected.has(f.path);
-    cb.onchange = () => {
-      if (cb.checked) selected.add(f.path);
-      else selected.delete(f.path);
-      updateStats();
-      updateFilterCount(matches.length);
-    };
+  let text = `${currentEntries.length} 个对象`;
+  if (filterEl.value.trim()) text += '（搜索结果）';
 
-    const name = document.createElement('span');
-    name.className = 'name';
-    name.textContent = f.path;
-    name.title = f.path;
-
-    const size = document.createElement('span');
-    size.className = 'size';
-    size.textContent = fmtSize(f.size);
-
-    row.append(cb, name, size);
-    frag.appendChild(row);
-  }
-  treeEl.appendChild(frag);
-  updateFilterCount(matches.length);
-}
-
-function updateFilterCount(n) {
-  if (filterEl.value.trim()) repoMetaEl.textContent = `筛选出 ${n} 个文件`;
-}
-
-function toggleExpand(node) {
-  if (expanded.has(node.path)) expanded.delete(node.path);
-  else expanded.add(node.path);
-  refresh();
-}
-
-function toggleDir(node, on) {
-  const files = [];
-  collectFiles(node, files);
-  for (const f of files) { if (on) selected.add(f); else selected.delete(f); }
-}
-
-function refresh() {
-  const scroll = treeEl.scrollTop;
-  render();
-  treeEl.scrollTop = scroll;
-  updateStats();
-}
-
-function updateStats() {
+  let count = 0;
   let size = 0;
-  for (const p of selected) size += sizes.get(p) || 0;
-  statCountEl.textContent = String(selected.size);
-  statSizeEl.textContent = fmtSize(size);
+  for (const p of selection) {
+    count++;
+    size += sizes.get(p) || 0;
+  }
+  if (count) text += `　　已选 ${count} 个${count && size ? `（${fmtSize(size)}）` : ''}`;
+  itemsEl.textContent = text;
+
+  $('status-dest').textContent = dest ? `下载到 ${dest}` : '下载目录：未设置（点击设置）';
 }
 
-function updateMeta() {
-  const totalSize = info.files.reduce((a, b) => a + b.size, 0);
-  metaText =
-    `${info.owner}/${info.repo} @ ${info.git_ref} · ${info.files.length} 个文件 · ${fmtSize(totalSize)}` +
-    (info.truncated ? ' · ⚠ 目录过大，结果被 GitHub 截断' : '');
-  repoMetaEl.textContent = metaText;
+function setProgress(done, total) {
+  const el = $('status-progress');
+  if (!total) { el.innerHTML = ''; return; }
+  const pct = Math.round((done / total) * 100);
+  el.innerHTML = `<span class="bar"><i style="width:${pct}%"></i></span>${done}/${total}`;
+}
+
+function setBusy(value, label) {
+  busy = value;
+  document.body.classList.toggle('busy', value);
+  loadBtn.textContent = value ? (label || '处理中…') : '打开仓库';
 }
 
 /* --------------------------------------------------------------- loading */
@@ -565,7 +696,8 @@ async function load() {
   const repo = repoEl.value.trim();
   if (!repo) return toast('请输入仓库地址', true);
   if (busy) return;
-  setBusy(true, '正在获取目录…');
+
+  setBusy(true, '正在打开…');
   try {
     const tree = await api().FetchRepoTree(repo, refEl.value || '');
     info = tree;
@@ -580,16 +712,11 @@ async function load() {
     }
     refEl.value = tree.git_ref;
 
-    sizes.clear();
-    selected.clear();
-    expanded.clear();
-    root = buildTree(tree.files);
-    dirPaths = new Set(collectDirPaths(root, []));
-    for (const child of root.children.values()) if (child.dir) expanded.add(child.path);
-
-    updateMeta();
-    refresh();
-    toast(`已加载 ${tree.files.length} 个文件`);
+    buildIndex();
+    history = [''];
+    histIndex = 0;
+    navigate('', false);
+    toast(`已打开 ${tree.owner}/${tree.repo} · ${tree.files.length} 个文件`);
   } catch (err) {
     toast(errText(err), true);
   } finally {
@@ -597,32 +724,32 @@ async function load() {
   }
 }
 
-// Re-fetch the tree, keeping the expanded folders and the current selection.
 async function refreshTree() {
   if (!info) return;
-  const keepExpanded = [...expanded];
-  const keepSelected = [...selected];
-
   const tree = await api().FetchRepoTree(repoId(), info.git_ref);
   info = tree;
+  buildIndex();
 
-  sizes.clear();
-  selected.clear();
-  expanded.clear();
-  root = buildTree(tree.files);
-  dirPaths = new Set(collectDirPaths(root, []));
+  // If the folder we're in disappeared (deleted or renamed), walk up.
+  while (currentPath && !dirExists(currentPath)) currentPath = dirname(currentPath);
 
-  for (const p of keepExpanded) if (dirPaths.has(p)) expanded.add(p);
-  for (const p of keepSelected) if (sizes.has(p)) selected.add(p);
-
-  updateMeta();
-  refresh();
+  selection = new Set();
+  anchorPath = null;
+  history = history.map((p) => (dirExists(p) ? p : ''));
+  render();
+  updateNavButtons();
 }
 
-// runMutation wraps a write: it guards on auth, shows progress, refreshes the
-// tree afterwards and reports the commit message.
+async function doRefresh() {
+  if (!info) return toast('请先打开仓库', true);
+  setBusy(true, '正在刷新…');
+  try { await refreshTree(); toast('已刷新'); }
+  catch (err) { toast(errText(err), true); }
+  finally { setBusy(false); }
+}
+
 async function runMutation(label, fn) {
-  if (!info) return toast('请先加载仓库', true);
+  if (!info) return toast('请先打开仓库', true);
   if (!requireLogin()) return;
 
   setBusy(true, label);
@@ -637,49 +764,41 @@ async function runMutation(label, fn) {
   }
 }
 
-/* -------------------------------------------------------------- downloads */
-async function pickFolder() {
+/* -------------------------------------------------------------- download */
+async function chooseDest() {
   try {
     const picked = await api().PickFolder();
-    if (picked) {
-      dest = picked;
-      destEl.value = picked;
-    }
+    if (picked) { dest = picked; updateStatus(); }
   } catch (err) {
     toast(errText(err), true);
   }
 }
 
-function selectAndDownload(node) {
-  const files = expandToFiles([node]);
-  selected.clear();
-  for (const f of files) selected.add(f);
-  refresh();
-  toast(`已勾选 ${files.length} 个文件，点右侧「下载选中」开始下载`);
+async function downloadSelection() {
+  if (!info) return toast('请先打开仓库', true);
+  if (!selection.size) return toast('请先选中要下载的文件', true);
+  if (!dest) {
+    await chooseDest();
+    if (!dest) return;
+  }
+  await download();
 }
 
 async function download() {
-  if (!info) return toast('请先加载仓库', true);
-  if (!selected.size) return toast('请先勾选要下载的文件', true);
-  if (!dest) return toast('请先选择下载目录', true);
   if (busy) return;
-
-  const paths = [...selected];
-  logEl.innerHTML = '';
+  const paths = [...selection];
   setProgress(0, paths.length);
   setBusy(true, '正在下载…');
 
-  const off = rt().EventsOn('download-progress', (p) => {
-    setProgress(p.done, p.total);
-    appendLog(`${p.done}/${p.total}  ${p.current}${p.failed ? '  ✗' : ''}`);
-  });
+  const off = rt().EventsOn('download-progress', (p) => setProgress(p.done, p.total));
 
   try {
     const res = await api().DownloadFiles(repoId(), info.git_ref, dest, paths);
+    setProgress(0, 0);
     toast(`下载完成：成功 ${res.downloaded}，失败 ${res.failed}`, res.failed > 0);
     if (res.errors && res.errors.length) {
-      appendLog('—— 失败明细 ——');
-      res.errors.slice(0, 100).forEach(appendLog);
+      console.warn('下载失败明细', res.errors);
+      toast(`有 ${res.errors.length} 个文件失败，详见控制台`, true);
     }
   } catch (err) {
     toast(errText(err), true);
@@ -689,13 +808,13 @@ async function download() {
   }
 }
 
-/* -------------------------------------------------------------- mutations */
-function collectMoves(node, newPath) {
-  if (!node.dir) return [{ from: node.path, to: newPath }];
-  const files = [];
-  collectFiles(node, files);
-  const prefix = `${node.path}/`;
-  return files.map((f) => ({ from: f, to: `${newPath}/${f.slice(prefix.length)}` }));
+/* ------------------------------------------------------------- mutations */
+function collectMovesForPath(p, newPath) {
+  if (filePaths.has(p)) return [{ from: p, to: newPath }];
+  const prefix = `${p}/`;
+  return info.files
+    .filter((f) => f.path.startsWith(prefix))
+    .map((f) => ({ from: f.path, to: `${newPath}/${f.path.slice(prefix.length)}` }));
 }
 
 async function confirmAndMove(moves, title) {
@@ -709,19 +828,23 @@ async function confirmAndMove(moves, title) {
   await runMutation('正在提交…', () => api().MovePaths(repoId(), info.git_ref, moves, ''));
 }
 
-async function confirmDeleteFiles(files) {
-  if (!files.length) return toast('没有可删除的文件', true);
+async function confirmDeletePaths(paths) {
+  if (!paths.length) return toast('没有可删除的文件', true);
   const ok = await confirmModal({
     title: '删除',
-    message: `将从当前分支删除 ${files.length} 个文件（之后可以在 git 历史里找回）：`,
-    items: files.map((f) => ({ text: f, cls: 'del' })),
+    message: `将从当前分支删除 ${paths.length} 个文件（之后可以在 git 历史里找回）：`,
+    items: paths.map((p) => ({ text: p, cls: 'del' })),
     okText: '确认删除',
   });
   if (!ok) return;
-  await runMutation('正在删除…', () => api().DeletePaths(repoId(), info.git_ref, files, ''));
+  await runMutation('正在删除…', () => api().DeletePaths(repoId(), info.git_ref, paths, ''));
 }
 
-const confirmDelete = (nodes) => confirmDeleteFiles(expandToFiles(nodes));
+function confirmDeleteEntries(entries) {
+  const files = new Set();
+  for (const e of entries) collectMovesForPath(e.path, e.path).forEach((m) => files.add(m.from));
+  return confirmDeletePaths([...files]);
+}
 
 async function promptNewFile(dir) {
   const answer = await promptModal({
@@ -733,7 +856,6 @@ async function promptNewFile(dir) {
     okText: '创建',
   });
   if (!answer) return;
-
   const target = answer.value.replace(/^\/+/, '');
   if (!target) return toast('路径不能为空', true);
   await runMutation('正在创建…', () => api().SaveFile(repoId(), info.git_ref, target, answer.extra, ''));
@@ -765,35 +887,73 @@ async function promptNewFolder(dir) {
   await runMutation('正在创建…', () => api().SaveFile(repoId(), info.git_ref, target, file.extra, ''));
 }
 
-async function promptRename(node) {
-  const name = await promptModal({
-    title: '重命名',
-    label: '新名称',
-    hint: node.path,
-    value: node.name,
-    okText: '下一步',
-  });
-  if (!name || name === node.name) return;
-  if (name.includes('/')) return toast('名称不能包含 /，要换目录请用「移动到」', true);
-
-  const newPath = joinPath(dirname(node.path), name);
-  await confirmAndMove(collectMoves(node, newPath), `重命名「${node.name}」`);
-}
-
-async function promptMove(node) {
+async function promptMove(entries) {
   const answer = await promptModal({
     title: '移动到',
     label: '目标目录',
-    hint: '留空表示仓库根目录',
-    value: dirname(node.path),
+    hint: entries.length > 1
+      ? `将移动 ${entries.length} 项，名称保持不变。留空表示仓库根目录。`
+      : '留空表示仓库根目录',
+    value: currentPath,
     okText: '下一步',
   });
   if (answer === null) return;
 
   const dir = answer.replace(/^\/+|\/+$/g, '');
-  const newPath = joinPath(dir, node.name);
-  if (newPath === node.path) return toast('目标路径没有变化');
-  await confirmAndMove(collectMoves(node, newPath), `移动「${node.path}」`);
+  const moves = [];
+  for (const entry of entries) {
+    const newPath = joinPath(dir, entry.name);
+    if (newPath === entry.path) continue;
+    moves.push(...collectMovesForPath(entry.path, newPath));
+  }
+  if (!moves.length) return toast('目标路径没有变化');
+  await confirmAndMove(moves, entries.length === 1 ? `移动「${entries[0].name}」` : `移动 ${entries.length} 项`);
+}
+
+// Explorer-style inline rename (F2 / context menu).
+function startInlineRename(entry) {
+  if (!requireLogin()) return;
+  const el = [...document.querySelectorAll('.item, .tile')]
+    .find((node) => node.__entry && node.__entry.path === entry.path);
+  if (!el) return;
+  const label = el.querySelector('.label');
+  if (!label) return;
+
+  el.classList.add('editing');
+  const input = document.createElement('input');
+  input.value = entry.name;
+  label.textContent = '';
+  label.appendChild(input);
+
+  const dot = entry.dir ? -1 : entry.name.lastIndexOf('.');
+  input.focus();
+  input.setSelectionRange(0, dot > 0 ? dot : entry.name.length);
+
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    el.classList.remove('editing');
+    if (!commit) return render();
+
+    const name = input.value.trim();
+    if (!name || name === entry.name) return render();
+    if (name.includes('/')) {
+      toast('名称不能包含 /，要换目录请用「移动到」', true);
+      return render();
+    }
+    const newPath = joinPath(dirname(entry.path), name);
+    confirmAndMove(collectMovesForPath(entry.path, newPath), `重命名「${entry.name}」`);
+  };
+
+  input.onmousedown = (e) => e.stopPropagation();
+  input.onclick = (e) => e.stopPropagation();
+  input.onkeydown = (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') finish(true);
+    else if (e.key === 'Escape') finish(false);
+  };
+  input.onblur = () => finish(true);
 }
 
 async function uploadInto(dir, kind) {
@@ -805,7 +965,7 @@ async function uploadInto(dir, kind) {
       const folder = await api().PickUploadFolder();
       picked = folder ? [folder] : [];
     } else {
-      picked = await api().PickUploadFiles() || [];
+      picked = (await api().PickUploadFiles()) || [];
     }
   } catch (err) {
     return toast(errText(err), true);
@@ -830,16 +990,14 @@ async function uploadInto(dir, kind) {
   await runMutation('正在上传…', () => api().UploadFiles(repoId(), info.git_ref, dir, picked, ''));
 }
 
-async function openEditor(node) {
+async function openEditor(entry) {
   if (!info) return;
   if (!requireLogin()) return;
 
-  // Read first, and release the busy state before opening the editor — otherwise
-  // the global "busy" rule would block the editor's own buttons.
   let file;
   setBusy(true, '正在读取…');
   try {
-    file = await api().ReadFile(repoId(), info.git_ref, node.path);
+    file = await api().ReadFile(repoId(), info.git_ref, entry.path);
   } catch (err) {
     toast(errText(err), true);
     return;
@@ -847,110 +1005,153 @@ async function openEditor(node) {
     setBusy(false);
   }
 
-  if (file.tooLarge) {
-    return toast(`文件太大（${fmtSize(file.size)}），请用右键「下载」`, true);
-  }
-  if (file.binary) {
-    return toast('这是二进制文件，编辑器打不开，请用右键「下载」', true);
-  }
+  if (file.tooLarge) return toast(`文件太大（${fmtSize(file.size)}），请用右键「下载」`, true);
+  if (file.binary) return toast('这是二进制文件，编辑器打不开，请用右键「下载」', true);
 
   const content = await editorModal({
-    title: node.path,
+    title: entry.path,
     content: file.content,
     hint: '保存会在当前分支上创建一个提交。',
   });
   if (content === null || content === file.content) return;
 
-  await runMutation('正在提交…', () => api().SaveFile(repoId(), info.git_ref, node.path, content, ''));
+  await runMutation('正在提交…', () => api().SaveFile(repoId(), info.git_ref, entry.path, content, ''));
+}
+
+/* ---------------------------------------------------------- drag & drop */
+function clearDropTargets() {
+  document.querySelectorAll('.drop-target').forEach((el) => el.classList.remove('drop-target'));
+}
+
+function setupDragAndDrop() {
+  listEl.addEventListener('dragover', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const el = e.target.closest('.item, .tile');
+    const folder = el && el.__entry && el.__entry.dir ? el : null;
+    clearDropTargets();
+    if (folder) folder.classList.add('drop-target');
+  });
+
+  listEl.addEventListener('dragleave', (e) => {
+    if (!e.relatedTarget || !listEl.contains(e.relatedTarget)) clearDropTargets();
+  });
+
+  listEl.addEventListener('drop', async (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+
+    const el = e.target.closest('.item, .tile');
+    const folder = el && el.__entry && el.__entry.dir ? el.__entry : null;
+    const paths = dragging;
+    dragging = null;
+    clearDropTargets();
+
+    const targetDir = folder ? folder.path : currentPath;
+    const moves = [];
+    for (const p of paths) {
+      if (dirname(p) === targetDir) continue;
+      if (folder && (p === folder.path || folder.path.startsWith(`${p}/`))) continue;
+      moves.push(...collectMovesForPath(p, joinPath(targetDir, basename(p))));
+    }
+    if (!moves.length) return toast('没有需要移动的文件');
+    await confirmAndMove(moves, folder ? `移动到「${folder.name}」` : '移动到当前文件夹');
+  });
 }
 
 /* ------------------------------------------------------------------ chrome */
-function setProgress(done, total) {
-  const pct = total ? Math.round((done / total) * 100) : 0;
-  barEl.style.width = `${pct}%`;
-  barTextEl.textContent = `${done} / ${total} (${pct}%)`;
-}
-
-function setBusy(value, label) {
-  busy = value;
-  document.body.classList.toggle('busy', value);
-  loadBtn.textContent = value ? (label || '处理中…') : '加载目录';
-  downloadBtn.textContent = value ? '处理中…' : '下载选中';
-}
-
-/* ------------------------------------------------------------------ wiring */
 loadBtn.onclick = load;
-pickBtn.onclick = pickFolder;
-downloadBtn.onclick = download;
+filterEl.oninput = () => { render(); };
+$('refresh').onclick = doRefresh;
+$('download').onclick = downloadSelection;
+$('status-dest').onclick = chooseDest;
+$('nav-back').onclick = goBack;
+$('nav-forward').onclick = goForward;
+$('nav-up').onclick = goUp;
 
-repoEl.onkeydown = (e) => { if (e.key === 'Enter') load(); };
-refEl.onchange = () => { if (info) load(); };
-
-let filterTimer = null;
-filterEl.oninput = () => {
-  clearTimeout(filterTimer);
-  filterTimer = setTimeout(render, 150);
+$('view-toggle').onclick = () => {
+  viewMode = viewMode === 'details' ? 'icons' : 'details';
+  $('view-toggle').textContent = viewMode === 'details' ? '详细信息' : '图标';
+  render();
 };
 
-$('refresh').onclick = () => {
-  if (!info) return toast('请先加载仓库', true);
-  setBusy(true, '正在刷新…');
-  refreshTree().then(() => toast('已刷新')).catch((err) => toast(errText(err), true)).finally(() => setBusy(false));
+crumbEl.onmousedown = (e) => {
+  if (e.target === crumbEl) startPathEdit();
 };
 
-$('select-all').onclick = () => {
-  if (!info) return;
-  for (const f of info.files) selected.add(f.path);
-  refresh();
+$('new-menu').onclick = (e) => {
+  const r = e.currentTarget.getBoundingClientRect();
+  showCtxMenu(r.left, r.bottom + 4, [
+    { label: '新建文件…', run: () => promptNewFile(currentPath) },
+    { label: '新建文件夹…', run: () => promptNewFolder(currentPath) },
+  ]);
 };
 
-$('clear-all').onclick = () => {
-  selected.clear();
-  refresh();
+$('upload-menu').onclick = (e) => {
+  const r = e.currentTarget.getBoundingClientRect();
+  showCtxMenu(r.left, r.bottom + 4, [
+    { label: '上传文件…', run: () => uploadInto(currentPath, 'files') },
+    { label: '上传文件夹…', run: () => uploadInto(currentPath, 'folder') },
+  ]);
 };
 
-$('delete-selected').onclick = () => {
-  if (!selected.size) return toast('请先勾选要删除的文件', true);
-  confirmDeleteFiles([...selected]);
-};
+// Clicking empty space clears the selection (like Explorer).
+listEl.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  if (e.target.closest('.item') || e.target.closest('.tile') || e.target.closest('.list-head')) return;
+  selection = new Set();
+  anchorPath = null;
+  paintSelection();
+  updateStatus();
+});
 
-$('move-selected').onclick = async () => {
-  const files = [...selected];
-  if (!files.length) return toast('请先勾选要移动的文件', true);
-  const answer = await promptModal({
-    title: '移动选中',
-    label: '目标目录',
-    hint: `将移动 ${files.length} 个文件，文件名保持不变。留空表示仓库根目录。`,
-    value: '',
-    okText: '下一步',
-  });
-  if (answer === null) return;
-
-  const dir = answer.replace(/^\/+|\/+$/g, '');
-  const moves = files.map((f) => ({ from: f, to: joinPath(dir, basename(f)) }));
-  const changed = moves.filter((m) => m.from !== m.to);
-  if (!changed.length) return toast('目标路径没有变化');
-  await confirmAndMove(changed, '移动选中');
-};
-
-// Right click anywhere in the tree.
-treeEl.addEventListener('contextmenu', (e) => {
+// Right click on empty space -> actions for the current folder.
+listEl.addEventListener('contextmenu', (e) => {
   e.preventDefault();
-  if (!root) return;
-  const row = e.target.closest ? e.target.closest('.row') : null;
-  openContextMenu(e, row && row.__node ? row.__node : null);
+  const el = e.target.closest('.item, .tile');
+  if (el && el.__entry) return;   // handled per item
+  if (!info) return;
+  selection = new Set();
+  paintSelection();
+  updateStatus();
+  openContextMenu(e, []);
 });
 
 document.addEventListener('mousedown', (e) => {
   if (!ctxMenu.contains(e.target)) hideCtxMenu();
 });
-document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape') return;
-  hideCtxMenu();
-  closeModal('prompt-modal');
-  closeModal('confirm-modal');
-});
 window.addEventListener('blur', hideCtxMenu);
+
+document.addEventListener('keydown', (e) => {
+  const tag = (e.target.tagName || '').toUpperCase();
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable;
+
+  if (e.key === 'Escape') {
+    hideCtxMenu();
+    closeModal('prompt-modal');
+    closeModal('confirm-modal');
+    if (typing) e.target.blur();
+    return;
+  }
+  if (typing || !info) return;
+
+  if (e.key === 'Backspace') { e.preventDefault(); goUp(); }
+  else if (e.key === 'F5') { e.preventDefault(); doRefresh(); }
+  else if (e.key === 'F2') { e.preventDefault(); const p = [...selection][0]; if (p) startInlineRename(entryMap.get(p) || entryFromPath(p)); }
+  else if (e.key === 'Delete') { e.preventDefault(); if (selection.size) confirmDeletePaths([...selection]); }
+  else if (e.key === 'Enter') { e.preventDefault(); const p = [...selection][0]; if (p) openEntry(entryMap.get(p) || entryFromPath(p)); }
+  else if (e.ctrlKey && e.key.toLowerCase() === 'a') {
+    e.preventDefault();
+    selection = new Set(currentEntries.map((x) => x.path));
+    paintSelection();
+    updateStatus();
+  } else if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack(); }
+  else if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goForward(); }
+});
+
+repoEl.onkeydown = (e) => { if (e.key === 'Enter') load(); };
+refEl.onchange = () => { if (info) load(); };
 
 /* ------------------------------------------------------------- auth wiring */
 authBtn.onclick = openAuthModal;
@@ -1038,6 +1239,8 @@ function registerLoginEvents(attempt = 0) {
 }
 
 /* ------------------------------------------------------------------ start */
-updateStats();
+setupDragAndDrop();
+updateNavButtons();
+updateStatus();
 registerLoginEvents();
 refreshAuth();
