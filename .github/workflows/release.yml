@@ -23,22 +23,38 @@ jobs:
         include:
           - name: windows-amd64
             os: windows-latest
+            platform: windows/amd64
+            archive: zip
+            binary: RepoExplorer.exe
+          - name: windows-arm64
+            os: windows-latest
+            platform: windows/arm64
             archive: zip
             binary: RepoExplorer.exe
           - name: linux-amd64
             os: ubuntu-22.04
+            platform: linux/amd64
+            archive: tar.gz
+            binary: RepoExplorer
+          - name: linux-arm64
+            os: ubuntu-22.04-arm
+            platform: linux/arm64
             archive: tar.gz
             binary: RepoExplorer
           - name: macos-amd64
             os: macos-13
+            platform: darwin/amd64
             archive: zip
             app: RepoExplorer.app
           - name: macos-arm64
             os: macos-14
+            platform: darwin/arm64
             archive: zip
             app: RepoExplorer.app
 
     runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
 
     steps:
       - name: Checkout
@@ -60,14 +76,14 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
       - name: Build application
-        run: wails build -clean
+        run: wails build -clean -platform ${{ matrix.platform }}
 
       - name: Package Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path "build/bin/${{ matrix.binary }}" -DestinationPath "dist/RepoExplorer-${{ github.ref_name }}-${{ matrix.name }}.zip" -Force
+          Compress-Archive -Path "build/bin/${{ matrix.binary }}" -DestinationPath "dist/RepoExplorer-${env:RELEASE_VERSION}-${{ matrix.name }}.zip" -Force
 
       - name: Package Linux
         if: runner.os == 'Linux'
@@ -75,13 +91,13 @@ jobs:
           mkdir -p dist package/RepoExplorer
           cp "build/bin/${{ matrix.binary }}" package/RepoExplorer/
           chmod +x package/RepoExplorer/${{ matrix.binary }}
-          tar -czf "dist/RepoExplorer-${GITHUB_REF_NAME}-${{ matrix.name }}.tar.gz" -C package RepoExplorer
+          tar -czf "dist/RepoExplorer-${RELEASE_VERSION}-${{ matrix.name }}.tar.gz" -C package RepoExplorer
 
       - name: Package macOS
         if: runner.os == 'macOS'
         run: |
           mkdir -p dist
-          ditto -c -k --sequesterRsrc --keepParent "build/bin/${{ matrix.app }}" "dist/RepoExplorer-${GITHUB_REF_NAME}-${{ matrix.name }}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "build/bin/${{ matrix.app }}" "dist/RepoExplorer-${RELEASE_VERSION}-${{ matrix.name }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
