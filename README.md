@@ -159,4 +159,4 @@ build/bin/RepoExplorer.exe
 
 ## License
 
-未指定。
+MIT License。详见 [LICENSE](LICENSE)。
