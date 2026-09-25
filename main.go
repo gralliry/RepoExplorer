@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"embed"
 
+	backend "github.com/gralliry/RepoExplorer/internal/app"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -11,8 +13,16 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// App is a thin binding wrapper kept in package main so the generated Wails
+// JavaScript namespace remains window.go.main.App.
+type App struct{ *backend.App }
+
+func newApp() *App { return &App{App: backend.New()} }
+
+func (a *App) startup(ctx context.Context) { backend.Startup(a.App, ctx) }
+
 func main() {
-	app := NewApp()
+	app := newApp()
 
 	err := wails.Run(&options.App{
 		Title:     "RepoExplorer",

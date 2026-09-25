@@ -18,6 +18,8 @@ const filterEl = $('filter');
 const listEl = $('list');
 const crumbEl = $('breadcrumb');
 const toastEl = $('toast');
+const toastTextEl = $('toast-text');
+const toastCloseEl = $('toast-close');
 const ctxMenu = $('ctx-menu');
 
 /* -------------------------------------------------------------- app state */
@@ -33,15 +35,16 @@ let entryMap = new Map();         // path -> entry
 let sizes = new Map();            // file path -> size
 let filePaths = new Set();        // every file in the repo
 let dirStats = new Map();         // dir path -> {count, size}
-let viewMode = 'details';         // 'details' | 'icons'
 let sortKey = 'name';
 let sortAsc = true;
+let selectionMode = false;
 let dest = '';
 let tempFolder = '';
 let busy = false;
 let dragging = null;              // paths being dragged
 let auth = { loggedIn: false, login: '', source: '' };
 let deviceFlow = null;
+let deviceFlowWatch = null;
 
 /* ------------------------------------------------------------------ utils */
 function errText(err) {
@@ -73,11 +76,16 @@ function fileType(name) {
 
 let toastTimer = null;
 function toast(msg, isError = false) {
-  toastEl.textContent = msg;
+  toastTextEl.textContent = msg;
   toastEl.className = 'toast show' + (isError ? ' err' : '');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toastEl.className = 'toast'; }, 3600);
+  if (!isError) toastTimer = setTimeout(() => { toastEl.className = 'toast'; }, 3600);
 }
+
+toastCloseEl.onclick = () => {
+  clearTimeout(toastTimer);
+  toastEl.className = 'toast';
+};
 
 function copyText(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
@@ -292,6 +300,7 @@ function renderAuthArea() {
   // inside the "open repository" dialog
   $('auth-box').classList.toggle('hidden', loggedIn);
   $('myrepo-box').classList.toggle('hidden', !loggedIn);
+  $('myrepo-refresh').classList.toggle('hidden', !loggedIn);
 
   // inside the settings dialog
   $('account-in').classList.toggle('hidden', !loggedIn);
@@ -310,8 +319,41 @@ function renderAuthArea() {
   renderSettingsPaths();
 }
 
+async function finishLoginFromSavedAuth(message) {
+  deviceFlow = null;
+  myReposLoaded = false;
+  await refreshAuth();
+  renderMyRepos();
+  await refreshMyRepos();
+  toast(message || `已登录 GitHub：${auth.source === 'oauth' ? '@' + (auth.login || '(未知用户)') : '手动 Token'}`);
+}
+
+function stopDeviceFlowWatch() {
+  if (deviceFlowWatch) clearInterval(deviceFlowWatch);
+  deviceFlowWatch = null;
+}
+
+function startDeviceFlowWatch() {
+  stopDeviceFlowWatch();
+  const expiresAt = Date.now() + 10 * 60 * 1000;
+  deviceFlowWatch = setInterval(async () => {
+    if (Date.now() > expiresAt) return stopDeviceFlowWatch();
+    try {
+      const next = await api().GetAuth();
+      if (next && next.loggedIn) {
+        stopDeviceFlowWatch();
+        auth = next;
+        await finishLoginFromSavedAuth();
+      }
+    } catch (err) { /* keep waiting */ }
+  }, 2000);
+}
+
 function renderMyRepoState() {
   const state = $('myrepo-state');
+  const refresh = $('myrepo-refresh');
+  refresh.disabled = myReposLoading;
+  refresh.textContent = myReposLoading ? '刷新中…' : '刷新';
   if (!auth.loggedIn) {
     state.textContent = '未登录';
     return;
@@ -328,6 +370,17 @@ function showAuthView(name) {
   for (const view of ['setup', 'code']) {
     $('auth-view-' + view).classList.toggle('hidden', view !== name);
   }
+}
+
+function selectAuthMethod(method) {
+  const token = method === 'token';
+  $('auth-tab-github').classList.toggle('active', !token);
+  $('auth-tab-token').classList.toggle('active', token);
+  $('auth-tab-github').setAttribute('aria-selected', String(!token));
+  $('auth-tab-token').setAttribute('aria-selected', String(token));
+  $('auth-method-github').classList.toggle('hidden', token);
+  $('auth-method-token').classList.toggle('hidden', !token);
+  if (token) $('auth-token').focus();
 }
 
 function openExternal(url) {
@@ -474,8 +527,7 @@ function render() {
     return;
   }
 
-  if (viewMode === 'icons') renderGrid(currentEntries, listEl);
-  else renderDetails(currentEntries, listEl);
+  renderDetails(currentEntries, listEl);
 
   updateStatus();
 }
@@ -501,13 +553,6 @@ function renderDetails(entries, container) {
   container.appendChild(body);
 }
 
-function renderGrid(entries, container) {
-  const grid = document.createElement('div');
-  grid.className = 'grid';
-  for (const entry of entries) grid.appendChild(buildTile(entry));
-  container.appendChild(grid);
-}
-
 function buildRow(entry) {
   const row = document.createElement('div');
   row.className = 'item'
@@ -518,6 +563,7 @@ function buildRow(entry) {
 
   const name = document.createElement('div');
   name.className = 'col-name';
+  if (selectionMode) name.appendChild(buildSelectionBox(entry));
   const icon = document.createElement('span');
   icon.className = 'icon';
   icon.textContent = entry.dir ? '📁' : '📄';
@@ -540,31 +586,24 @@ function buildRow(entry) {
   return row;
 }
 
-function buildTile(entry) {
-  const tile = document.createElement('div');
-  tile.className = 'tile'
-    + (selection.has(entry.path) ? ' selected' : '')
-    + (activeCutSet && activeCutSet.has(entry.path) ? ' cut' : '');
-  tile.__entry = entry;
-  tile.draggable = true;
-
-  const icon = document.createElement('div');
-  icon.className = 'tile-icon';
-  icon.textContent = entry.dir ? '📁' : '📄';
-
-  const label = document.createElement('div');
-  label.className = 'label tile-label';
-  label.textContent = entry.name;
-  label.title = entry.path;
-
-  tile.append(icon, label);
-  attachItemEvents(tile, entry);
-  return tile;
+function buildSelectionBox(entry) {
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.className = 'select-box';
+  box.checked = selection.has(entry.path);
+  box.title = selection.has(entry.path) ? '取消选择' : '选择';
+  box.onclick = (e) => e.preventDefault();
+  return box;
 }
 
 function attachItemEvents(el, entry) {
   el.onmousedown = (e) => {
     if (e.button !== 0 || el.classList.contains('editing')) return;
+    if (selectionMode) {
+      e.preventDefault();
+      toggleSelection(entry);
+      return;
+    }
     selectWithModifiers(entry, e);
   };
   el.ondblclick = () => openEntry(entry);
@@ -599,10 +638,26 @@ function selectionEntries() {
 }
 
 function paintSelection() {
-  for (const el of document.querySelectorAll('.item, .tile')) {
+  for (const el of document.querySelectorAll('.item')) {
     if (!el.__entry) continue;
-    el.classList.toggle('selected', selection.has(el.__entry.path));
+    const selected = selection.has(el.__entry.path);
+    el.classList.toggle('selected', selected);
+    const box = el.querySelector('.select-box');
+    if (box) {
+      box.checked = selected;
+      box.title = selected ? '取消选择' : '选择';
+    }
   }
+}
+
+function toggleSelection(entry) {
+  if (selection.has(entry.path)) selection.delete(entry.path);
+  else {
+    selection.add(entry.path);
+    anchorPath = entry.path;
+  }
+  paintSelection();
+  updateStatus();
 }
 
 function selectWithModifiers(entry, e) {
@@ -646,6 +701,7 @@ function navigate(path, push = true) {
 
   selection = new Set();
   anchorPath = null;
+  selectionMode = false;
   filterEl.value = '';
   render();
   updateNavButtons();
@@ -724,6 +780,22 @@ function updateWriteControls() {
     btn.disabled = ro;
     btn.title = ro ? '只读仓库，只能下载' : (id === 'new-menu' ? '新建' : '上传');
   }
+  $('select-all').disabled = !info || !currentEntries.length;
+  $('select-all').textContent = selectionMode ? '取消' : '选择';
+  $('select-all').title = selectionMode ? '退出选择模式' : '进入选择模式';
+
+  const hasSelection = !!selection.size;
+  $('copy-selected').disabled = ro || !hasSelection;
+  $('cut-selected').disabled = ro || !hasSelection;
+  $('paste-selected').disabled = ro || !clipboard;
+  $('rename-selected').disabled = ro || selection.size !== 1;
+  $('delete-action').disabled = ro || !hasSelection;
+
+  $('copy-selected').title = ro ? '只读仓库，不能复制' : (hasSelection ? `复制选中的 ${selection.size} 项 (Ctrl+C)` : '请先选中要复制的项目');
+  $('cut-selected').title = ro ? '只读仓库，不能剪切' : (hasSelection ? `剪切选中的 ${selection.size} 项 (Ctrl+X)` : '请先选中要剪切的项目');
+  $('paste-selected').title = ro ? '只读仓库，不能粘贴' : (clipboard ? `粘贴 ${clipboard.paths.length} 项到当前文件夹 (Ctrl+V)` : '剪贴板为空');
+  $('rename-selected').title = ro ? '只读仓库，不能重命名' : (selection.size === 1 ? '重命名选中的项目 (F2)' : '请选中 1 个项目再重命名');
+  $('delete-action').title = ro ? '只读仓库，不能删除' : (hasSelection ? `删除选中的 ${selection.size} 项 (Delete)` : '请先选中要删除的项目');
 }
 
 function updateStatus() {
@@ -749,11 +821,12 @@ function updateStatus() {
   itemsEl.textContent = text;
 }
 
-function setProgress(done, total) {
+function setProgress(done, total, label = '', current = '') {
   const el = $('status-progress');
   if (!total) { el.innerHTML = ''; return; }
-  const pct = Math.round((done / total) * 100);
-  el.innerHTML = `<span class="bar"><i style="width:${pct}%"></i></span>${done}/${total}`;
+  const pct = Math.max(0, Math.min(100, Math.round((done / total) * 100)));
+  const text = [label, current].filter(Boolean).join('：');
+  el.innerHTML = `<span class="bar"><i style="width:${pct}%"></i></span>${text ? `${escapeHtml(text)} ` : ''}${done}/${total}`;
 }
 
 function setBusy(value, label) {
@@ -769,8 +842,11 @@ async function load() {
   if (busy) return;
 
   setBusy(true, '正在打开…');
+  setProgress(0, 3, '打开仓库');
   try {
+    setProgress(1, 3, '获取仓库文件…');
     const tree = await api().FetchRepoTree(repo, refEl.value || '');
+    setProgress(2, 3, '构建文件列表…');
     info = tree;
     currentRepo = `${tree.owner}/${tree.repo}`;
     repoNameEl.textContent = currentRepo;
@@ -791,10 +867,12 @@ async function load() {
     history = [''];
     histIndex = 0;
     navigate('', false);
+    setProgress(3, 3, '打开完成');
     toast(`已打开 ${tree.owner}/${tree.repo} · ${tree.files.length} 个文件`);
   } catch (err) {
     toast(errText(err), true);
   } finally {
+    setProgress(0, 0);
     setBusy(false);
   }
 }
@@ -818,9 +896,10 @@ async function refreshTree() {
 async function doRefresh() {
   if (!info) return toast('请先打开仓库', true);
   setBusy(true, '正在刷新…');
-  try { await refreshTree(); toast('已刷新'); }
+  setProgress(0, 2, '刷新仓库');
+  try { await refreshTree(); setProgress(2, 2, '刷新完成'); toast('已刷新'); }
   catch (err) { toast(errText(err), true); }
-  finally { setBusy(false); }
+  finally { setProgress(0, 0); setBusy(false); }
 }
 
 async function runMutation(label, fn) {
@@ -828,15 +907,21 @@ async function runMutation(label, fn) {
   if (!requireWrite()) return false;
 
   setBusy(true, label);
+  setProgress(0, 1, label || '处理中…');
+  const off = rt().EventsOn('task-progress', (p) => setProgress(p.done, p.total, label || '处理中…', p.current || ''));
   try {
     const result = await fn();
+    setProgress(1, 2, '重新拉取仓库列表…');
     await refreshTree();
+    setProgress(2, 2, '完成');
     toast(`已提交：${result.message}`);
     return true;
   } catch (err) {
     toast(errText(err), true);
     return false;
   } finally {
+    if (typeof off === 'function') off();
+    setProgress(0, 0);
     setBusy(false);
   }
 }
@@ -881,6 +966,7 @@ function copySelection(mode) {
   clipboard = { mode, paths: [...selection] };
   paintClipboard();
   render();
+  updateStatus();
   toast(`已${mode === 'copy' ? '复制' : '剪切'} ${clipboard.paths.length} 项`);
 }
 
@@ -959,10 +1045,10 @@ async function downloadSelection() {
 async function download() {
   if (busy) return;
   const paths = [...selection];
-  setProgress(0, paths.length);
+  setProgress(0, paths.length, '下载');
   setBusy(true, '正在下载…');
 
-  const off = rt().EventsOn('download-progress', (p) => setProgress(p.done, p.total));
+  const off = rt().EventsOn('download-progress', (p) => setProgress(p.done, p.total, '下载', p.current || ''));
 
   try {
     const res = await api().DownloadFiles(repoId(), info.git_ref, dest, paths);
@@ -976,6 +1062,7 @@ async function download() {
     toast(errText(err), true);
   } finally {
     if (typeof off === 'function') off();
+    setProgress(0, 0);
     setBusy(false);
   }
 }
@@ -1085,7 +1172,7 @@ async function promptMove(entries) {
 // Explorer-style inline rename (F2 / context menu).
 function startInlineRename(entry) {
   if (!requireWrite()) return;
-  const el = [...document.querySelectorAll('.item, .tile')]
+  const el = [...document.querySelectorAll('.item')]
     .find((node) => node.__entry && node.__entry.path === entry.path);
   if (!el) return;
   const label = el.querySelector('.label');
@@ -1145,11 +1232,14 @@ async function uploadInto(dir, kind) {
   if (!picked.length) return;
 
   let items;
+  setProgress(0, 1, '扫描本地文件…');
   try {
     items = await api().PlanUpload(dir, picked);
   } catch (err) {
+    setProgress(0, 0);
     return toast(errText(err), true);
   }
+  setProgress(0, 0);
 
   const ok = await confirmModal({
     title: '上传',
@@ -1169,12 +1259,16 @@ async function openFile(entry) {
   if (!info) return;
 
   setBusy(true, '正在打开…');
+  setProgress(0, 2, '打开文件', entry.path);
   try {
+    setProgress(1, 2, '下载临时文件', entry.path);
     const local = await api().OpenFile(repoId(), info.git_ref, entry.path);
+    setProgress(2, 2, '打开完成', basename(local));
     toast(`已用系统默认程序打开：${basename(local)}`);
   } catch (err) {
     toast(errText(err), true);
   } finally {
+    setProgress(0, 0);
     setBusy(false);
   }
 }
@@ -1189,7 +1283,7 @@ function setupDragAndDrop() {
     if (!dragging) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    const el = e.target.closest('.item, .tile');
+    const el = e.target.closest('.item');
     const folder = el && el.__entry && el.__entry.dir ? el : null;
     clearDropTargets();
     if (folder) folder.classList.add('drop-target');
@@ -1203,7 +1297,7 @@ function setupDragAndDrop() {
     if (!dragging) return;
     e.preventDefault();
 
-    const el = e.target.closest('.item, .tile');
+    const el = e.target.closest('.item');
     const folder = el && el.__entry && el.__entry.dir ? el.__entry : null;
     const paths = dragging;
     dragging = null;
@@ -1274,6 +1368,9 @@ async function refreshMyRepos(force = false) {
     myRepos = [];
     myReposError = errText(err);
     myReposLoaded = false;
+    if (myReposError.includes('登录已失效') || myReposError.includes('GitHub API 401')) {
+      await refreshAuth();
+    }
   } finally {
     myReposLoading = false;
     renderMyRepoState();
@@ -1367,12 +1464,10 @@ function renderMyRepos() {
 
 /* ------------------------------------------------------------------ chrome */
 loadBtn.onclick = openOpenModal;
+$('myrepo-refresh').onclick = () => refreshMyRepos(true);
 
 $('settings-btn').onclick = openSettings;
 $('settings-close').onclick = () => closeModal('settings-modal');
-$('settings-modal').addEventListener('click', (e) => {
-  if (e.target === $('settings-modal')) closeModal('settings-modal');
-});
 $('picker-to-settings').onclick = () => { closeModal('open-modal'); openSettings(); };
 $('settings-pick-dest').onclick = () => chooseDest();
 $('settings-open-temp').onclick = async () => {
@@ -1384,7 +1479,6 @@ $('settings-open-temp').onclick = async () => {
 };
 
 $('open-close').onclick = () => closeModal('open-modal');
-$('open-modal').addEventListener('click', (e) => { if (e.target === $('open-modal')) closeModal('open-modal'); });
 $('myrepo-search').oninput = renderMyRepos;
 $('manual-open').onclick = () => openRepo($('manual-repo').value);
 $('manual-repo').onkeydown = (e) => {
@@ -1395,15 +1489,31 @@ $('manual-repo').onkeydown = (e) => {
 filterEl.oninput = () => { render(); };
 $('refresh').onclick = doRefresh;
 $('download').onclick = downloadSelection;
+$('select-all').onclick = () => {
+  if (!info || !currentEntries.length) return;
+  selectionMode = !selectionMode;
+  if (!selectionMode) {
+    selection = new Set();
+    anchorPath = null;
+  }
+  render();
+  updateStatus();
+};
+$('copy-selected').onclick = () => copySelection('copy');
+$('cut-selected').onclick = () => copySelection('cut');
+$('paste-selected').onclick = () => pasteClipboard();
+$('rename-selected').onclick = () => {
+  const p = [...selection][0];
+  if (!p) return toast('请先选中要重命名的项目', true);
+  startInlineRename(entryMap.get(p) || entryFromPath(p));
+};
+$('delete-action').onclick = () => {
+  if (!selection.size) return toast('请先选中要删除的项目', true);
+  confirmDeleteEntries(selectionEntries());
+};
 $('nav-back').onclick = goBack;
 $('nav-forward').onclick = goForward;
 $('nav-up').onclick = goUp;
-
-$('view-toggle').onclick = () => {
-  viewMode = viewMode === 'details' ? 'icons' : 'details';
-  $('view-toggle').textContent = viewMode === 'details' ? '详细信息' : '图标';
-  render();
-};
 
 crumbEl.onmousedown = (e) => {
   if (e.target === crumbEl) startPathEdit();
@@ -1428,7 +1538,7 @@ $('upload-menu').onclick = (e) => {
 // Clicking empty space clears the selection (like Explorer).
 listEl.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
-  if (e.target.closest('.item') || e.target.closest('.tile') || e.target.closest('.list-head')) return;
+  if (e.target.closest('.item') || e.target.closest('.list-head')) return;
   selection = new Set();
   anchorPath = null;
   paintSelection();
@@ -1438,7 +1548,7 @@ listEl.addEventListener('mousedown', (e) => {
 // Right click on empty space -> actions for the current folder.
 listEl.addEventListener('contextmenu', (e) => {
   e.preventDefault();
-  const el = e.target.closest('.item, .tile');
+  const el = e.target.closest('.item');
   if (el && el.__entry) return;   // handled per item
   if (!info) return;
   selection = new Set();
@@ -1485,10 +1595,14 @@ document.addEventListener('keydown', (e) => {
 refEl.onchange = () => { if (info) load(); };
 
 /* ------------------------------------------------------------- auth wiring */
+$('auth-tab-github').onclick = () => selectAuthMethod('github');
+$('auth-tab-token').onclick = () => selectAuthMethod('token');
+
 $('auth-start').onclick = async () => {
   try {
     await api().StartGitHubLogin();
     deviceFlow = null;
+    startDeviceFlowWatch();
     $('auth-user-code').textContent = '········';
     $('auth-code-status').textContent = '正在向 GitHub 申请验证码…';
     showAuthView('code');
@@ -1509,6 +1623,7 @@ $('auth-copy').onclick = () => {
 $('auth-cancel').onclick = async () => {
   try { await api().CancelGitHubLogin(); } catch (err) { /* 忽略 */ }
   deviceFlow = null;
+  stopDeviceFlowWatch();
   showAuthView('setup');
 };
 
@@ -1558,16 +1673,13 @@ function registerLoginEvents(attempt = 0) {
   });
 
   rt().EventsOn('github-login-done', async (result) => {
-    deviceFlow = null;
-    myReposLoaded = false;      // the picker should reload the list for this account
-    await refreshAuth();
-    renderMyRepos();
-    await refreshMyRepos();
-    toast(`已登录 GitHub：@${result.login || '(未知用户)'}`);
+    stopDeviceFlowWatch();
+    await finishLoginFromSavedAuth(`已登录 GitHub：@${result.login || '(未知用户)'}`);
   });
 
   rt().EventsOn('github-login-error', (message) => {
     deviceFlow = null;
+    stopDeviceFlowWatch();
     toast(String(message), true);
     if (!auth.loggedIn) showAuthView('setup');
   });

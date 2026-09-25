@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"os"
@@ -44,12 +44,12 @@ func TestLiveMaterializeFile(t *testing.T) {
 	}
 	t.Setenv("APPDATA", t.TempDir())
 
-	app := NewApp()
+	app := New()
 	if err := app.SaveManualToken(token); err != nil {
 		t.Fatalf("保存 Token 失败：%v", err)
 	}
 
-	local, err := app.materializeFile("octocat/Hello-World", "master", "README")
+	local, err := (githubProvider{}).materializeFile(app, "octocat/Hello-World", "master", "README")
 	if err != nil {
 		t.Fatalf("materializeFile: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestLiveMaterializeFile(t *testing.T) {
 	t.Logf("已落地到 %s：%q", local, string(data))
 
 	// A missing file must fail rather than silently produce an empty temp file.
-	if _, err := app.materializeFile("octocat/Hello-World", "master", "nope.txt"); err == nil {
+	if _, err := (githubProvider{}).materializeFile(app, "octocat/Hello-World", "master", "nope.txt"); err == nil {
 		t.Error("不存在的文件应该报错")
 	}
 }

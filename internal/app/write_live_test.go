@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gralliry/RepoExplorer/internal/githubutil"
 )
 
 // The write side is exercised against a real throwaway repository, because
@@ -25,7 +27,7 @@ func liveWriteEnv(t *testing.T) (*App, string, string) {
 	}
 	t.Setenv("APPDATA", t.TempDir())
 
-	app := NewApp()
+	app := New()
 	if err := app.SaveManualToken(token); err != nil {
 		t.Fatalf("保存测试用 Token 失败：%v", err)
 	}
@@ -51,7 +53,7 @@ func liveTreePaths(t *testing.T, app *App, repo, branch, prefix string) []string
 // operation produced.
 func commitParents(t *testing.T, repo, sha, token string) []string {
 	t.Helper()
-	owner, name, err := parseRepo(repo)
+	owner, name, err := githubutil.ParseRepo(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +172,7 @@ func TestLiveWriteLifecycle(t *testing.T) {
 	}
 
 	// ---- 5. move a whole folder, and prove it is ONE commit -------------
-	owner, name, _ := parseRepo(repo)
+	owner, name, _ := githubutil.ParseRepo(repo)
 	client := newHTTPClient(30 * time.Second)
 	headBefore, _, err := branchHead(context.Background(), client, owner, name, branch, token)
 	if err != nil {
@@ -259,7 +261,7 @@ func TestLiveWriteRejectsConflict(t *testing.T) {
 
 func TestLiveWriteRequiresAuth(t *testing.T) {
 	t.Setenv("APPDATA", t.TempDir())
-	app := NewApp()
+	app := New()
 
 	_, err := app.SaveFile("octocat/Hello-World", "master", "x.txt", "x", "")
 	if err == nil {

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -23,7 +23,7 @@ func skipUnlessLive(t *testing.T) {
 func TestFetchRepoTreeLive(t *testing.T) {
 	skipUnlessLive(t)
 
-	tree, err := NewApp().FetchRepoTree("octocat/Hello-World", "")
+	tree, err := New().FetchRepoTree("octocat/Hello-World", "")
 	if err != nil {
 		t.Fatalf("FetchRepoTree 失败: %v", err)
 	}

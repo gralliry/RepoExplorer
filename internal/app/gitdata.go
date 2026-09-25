@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -10,6 +10,10 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/gralliry/RepoExplorer/internal/githubutil"
+	"github.com/gralliry/RepoExplorer/internal/repopath"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // This file implements the write side of the GitHub API. Everything goes through
@@ -70,25 +74,6 @@ type PlannedChange struct {
 	Action string `json:"action"` // "add" | "update" | "delete" | "move"
 	From   string `json:"from,omitempty"`
 	Size   int64  `json:"size"`
-}
-
-/* ---------------------------------------------------------------- helpers */
-
-// cleanRepoPath normalises a repo-relative path and rejects anything that could
-// escape the repository (absolute paths, "..", empty segments).
-func cleanRepoPath(p string) (string, error) {
-	p = strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
-	p = strings.Trim(p, "/")
-	if p == "" {
-		return "", fmt.Errorf("路径不能为空")
-	}
-	parts := strings.Split(p, "/")
-	for _, seg := range parts {
-		if seg == "" || seg == "." || seg == ".." {
-			return "", fmt.Errorf("非法路径：%s", p)
-		}
-	}
-	return strings.Join(parts, "/"), nil
 }
 
 // defaultMessage returns the user supplied message, or generates one.
@@ -170,7 +155,7 @@ type remoteEntry struct {
 // branchHead resolves a branch to its head commit and root tree.
 func branchHead(ctx context.Context, client *http.Client, owner, repo, branch, token string) (string, string, error) {
 	var ref refResponse
-	url := fmt.Sprintf("%s/repos/%s/%s/git/ref/heads/%s", apiBase, owner, repo, escapeRef(branch))
+	url := fmt.Sprintf("%s/repos/%s/%s/git/ref/heads/%s", apiBase, owner, repo, githubutil.EscapeRef(branch))
 	if err := apiGet(ctx, client, url, token, &ref); err != nil {
 		return "", "", err
 	}
@@ -245,21 +230,29 @@ func (a *App) commitChanges(owner, repo, branch string, describe func(index map[
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	emit := func(done, total int, current string) {
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "task-progress", Progress{Done: done, Total: total, Current: current})
+		}
+	}
 	client := newHTTPClient(120 * time.Second)
 	token := a.effectiveToken()
 	if token == "" {
 		return nil, fmt.Errorf("写操作需要授权：请点右上角「认证」登录 GitHub")
 	}
 
+	emit(0, 1, "读取分支信息…")
 	headSHA, treeSHA, err := branchHead(ctx, client, owner, repo, branch, token)
 	if err != nil {
 		return nil, err
 	}
+	emit(0, 1, "读取仓库文件列表…")
 	index, err := treeIndex(ctx, client, owner, repo, treeSHA, token)
 	if err != nil {
 		return nil, err
 	}
 
+	emit(0, 1, "生成提交计划…")
 	changes, err := plan(index)
 	if err != nil {
 		return nil, err
@@ -275,9 +268,19 @@ func (a *App) commitChanges(owner, repo, branch string, describe func(index map[
 		message = "Update repository"
 	}
 
+	blobs := 0
+	for _, ch := range changes {
+		if !ch.Delete && ch.BlobSHA == "" {
+			blobs++
+		}
+	}
+	total := blobs + 3 // blobs + create tree + create commit + update ref
+	done := 0
+	emit(done, total, "准备文件内容…")
+
 	entries := make([]treeEntryRequest, 0, len(changes)*2)
 	for _, ch := range changes {
-		target, err := cleanRepoPath(ch.Path)
+		target, err := repopath.CleanPath(ch.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -302,11 +305,14 @@ func (a *App) commitChanges(owner, repo, branch string, describe func(index map[
 			if err != nil {
 				return nil, err
 			}
+			done++
+			emit(done, total, "上传 "+target)
 		}
 		entries = append(entries, treeEntryRequest{Path: target, Mode: mode, Type: "blob", SHA: &sha})
 	}
 
 	// Build the new tree on top of the current one.
+	emit(done, total, "创建文件树…")
 	var treeOut struct {
 		SHA string `json:"sha"`
 	}
@@ -318,6 +324,8 @@ func (a *App) commitChanges(owner, repo, branch string, describe func(index map[
 	if err := apiSend(ctx, client, http.MethodPost, treeURL, token, treePayload, &treeOut); err != nil {
 		return nil, err
 	}
+	done++
+	emit(done, total, "创建提交…")
 
 	// Commit it.
 	var commitOut struct {
@@ -332,16 +340,20 @@ func (a *App) commitChanges(owner, repo, branch string, describe func(index map[
 	if err := apiSend(ctx, client, http.MethodPost, commitURL, token, commitPayload, &commitOut); err != nil {
 		return nil, err
 	}
+	done++
+	emit(done, total, "更新分支…")
 
 	// Move the branch to the new commit.
 	refPayload := struct {
 		SHA   string `json:"sha"`
 		Force bool   `json:"force"`
 	}{SHA: commitOut.SHA, Force: false}
-	refURL := fmt.Sprintf("%s/repos/%s/%s/git/refs/heads/%s", apiBase, owner, repo, escapeRef(branch))
+	refURL := fmt.Sprintf("%s/repos/%s/%s/git/refs/heads/%s", apiBase, owner, repo, githubutil.EscapeRef(branch))
 	if err := apiSend(ctx, client, http.MethodPatch, refURL, token, refPayload, nil); err != nil {
 		return nil, err
 	}
+	done++
+	emit(done, total, "完成")
 
 	return &CommitResult{SHA: commitOut.SHA, Message: message, Changes: len(changes)}, nil
 }

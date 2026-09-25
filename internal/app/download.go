@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gralliry/RepoExplorer/internal/githubutil"
+	"github.com/gralliry/RepoExplorer/internal/repopath"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -30,28 +32,8 @@ type DownloadResult struct {
 	Errors     []string `json:"errors"`
 }
 
-// safeJoin joins a repo-relative path onto dest, refusing anything that tries to
-// escape the destination directory.
-func safeJoin(dest, rel string) (string, error) {
-	parts := strings.Split(rel, "/")
-	cleaned := make([]string, 0, len(parts))
-	for _, p := range parts {
-		switch p {
-		case "", ".":
-			continue
-		case "..":
-			return "", fmt.Errorf("路径包含 ..，已跳过")
-		}
-		cleaned = append(cleaned, p)
-	}
-	if len(cleaned) == 0 {
-		return "", fmt.Errorf("非法路径：%s", rel)
-	}
-	return filepath.Join(append([]string{dest}, cleaned...)...), nil
-}
-
 func downloadOne(ctx context.Context, client *http.Client, base, token, dest, path string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/"+escapeRef(path), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/"+githubutil.EscapeRef(path), nil)
 	if err != nil {
 		return err
 	}
@@ -69,7 +51,7 @@ func downloadOne(ctx context.Context, client *http.Client, base, token, dest, pa
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	out, err := safeJoin(dest, path)
+	out, err := repopath.SafeJoin(dest, path)
 	if err != nil {
 		return err
 	}
@@ -91,8 +73,8 @@ func downloadOne(ctx context.Context, client *http.Client, base, token, dest, pa
 // DownloadFiles fetches the selected repo-relative paths into dest, keeping the
 // directory structure and emitting "download-progress" events as it goes.
 // Authentication comes from the stored credentials.
-func (a *App) DownloadFiles(repo, gitRef, dest string, paths []string) (*DownloadResult, error) {
-	owner, name, err := parseRepo(repo)
+func (githubProvider) DownloadFiles(a *App, repo, gitRef, dest string, paths []string) (*DownloadResult, error) {
+	owner, name, err := githubutil.ParseRepo(repo)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +95,7 @@ func (a *App) DownloadFiles(repo, gitRef, dest string, paths []string) (*Downloa
 	}
 	client := newHTTPClient(300 * time.Second)
 	token := a.effectiveToken()
-	base := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", owner, name, escapeRef(gitRef))
+	base := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", owner, name, githubutil.EscapeRef(gitRef))
 
 	total := len(paths)
 	var done int64

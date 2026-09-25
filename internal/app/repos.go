@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -44,7 +44,7 @@ const reposMaxPages = 5 // 500 repositories is plenty for a picker
 //   - organization  a repository of an organisation they belong to
 //
 // Requires authentication.
-func (a *App) ListMyRepos() ([]RepoSummary, error) {
+func (githubProvider) ListMyRepos(a *App) ([]RepoSummary, error) {
 	token := a.effectiveToken()
 	if token == "" {
 		return nil, fmt.Errorf("需要先登录 GitHub 才能列出你的仓库")
@@ -61,6 +61,10 @@ func (a *App) ListMyRepos() ([]RepoSummary, error) {
 		Login string `json:"login"`
 	}
 	if err := apiGet(ctx, client, apiBase+"/user", token, &me); err != nil {
+		if isGitHubUnauthorized(err) {
+			_ = a.ClearAuth()
+			return nil, fmt.Errorf("登录已失效，请重新登录 GitHub 或填写新的 Token\n%w", err)
+		}
 		return nil, err
 	}
 

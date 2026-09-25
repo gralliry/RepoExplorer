@@ -177,6 +177,14 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
 .item.drop-target { background: #dbe4ff; box-shadow: inset 0 0 0 1px var(--accent); }
 
 .item .col-name { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 10px; }
+.select-box {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  accent-color: var(--accent);
+  pointer-events: none;
+}
 .item .icon { flex: none; }
 .item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .col-size, .item .col-type {
@@ -194,39 +202,6 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
   border: 1px solid var(--accent);
   border-radius: 4px;
   font: inherit;
-}
-
-/* icons view */
-.grid {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  gap: 4px;
-  padding: 12px;
-}
-.tile {
-  width: 108px;
-  padding: 10px 6px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  border-radius: 8px;
-  user-select: none;
-  cursor: default;
-}
-.tile:hover { background: #f7f8fb; }
-.tile.selected { background: var(--accent-soft); }
-.tile.cut { opacity: .45; }
-.tile.drop-target { box-shadow: inset 0 0 0 1px var(--accent); background: #dbe4ff; }
-.tile-icon { font-size: 34px; line-height: 1; }
-.tile-label {
-  max-height: 34px;
-  overflow: hidden;
-  font-size: 12px;
-  line-height: 1.4;
-  text-align: center;
-  word-break: break-all;
 }
 
 /* ------------------------------------------------------------- status bar */
@@ -391,6 +366,37 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
 .auth-btn.on { color: var(--ok); border-color: var(--ok); font-weight: 600; }
 .auth-user { font-size: 20px; font-weight: 700; }
 
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  background: #f2f4f8;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.auth-tab {
+  border-color: transparent;
+  background: transparent;
+  font-weight: 600;
+}
+.auth-tab:hover { background: #fff; }
+.auth-tab.active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 1px 3px rgba(16, 20, 28, 0.12);
+}
+.auth-method {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fafbfc;
+}
+
 .code-row { display: flex; align-items: center; gap: 10px; }
 .user-code {
   flex: 1;
@@ -470,6 +476,9 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
   position: fixed;
   left: 50%;
   bottom: 40px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   transform: translate(-50%, 20px);
   max-width: 70vw;
   padding: 9px 16px;
@@ -483,7 +492,30 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
   white-space: pre-wrap;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
-.toast.err { background: var(--danger); }
+.toast.err {
+  min-width: min(520px, 88vw);
+  max-width: 88vw;
+  max-height: 45vh;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--danger);
+  pointer-events: auto;
+  user-select: text;
+}
+.toast-text { flex: 1; min-width: 0; }
+.toast-close {
+  display: none;
+  flex: none;
+  padding: 0 5px;
+  color: #fff;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.toast.err .toast-close { display: block; }
+.toast.err .toast-close:hover { background: rgba(255, 255, 255, .18); }
 
 /* While a network operation runs, block clicks — but never inside a dialog. */
 body.busy button { opacity: .55; pointer-events: none; }

@@ -33,10 +33,15 @@
 
     <input id="filter" type="search" class="nav-search" placeholder="搜索文件（递归整个仓库）" />
 
-    <button id="view-toggle" class="ghost" title="切换视图">详细信息</button>
     <button id="refresh" class="ghost" title="刷新 (F5)">刷新</button>
     <button id="new-menu" class="ghost" title="新建">新建 ▾</button>
     <button id="upload-menu" class="ghost" title="上传">上传 ▾</button>
+    <button id="select-all" class="ghost" title="进入选择模式">选择</button>
+    <button id="copy-selected" class="ghost" title="复制选中的项目 (Ctrl+C)">复制</button>
+    <button id="cut-selected" class="ghost" title="剪切选中的项目 (Ctrl+X)">剪切</button>
+    <button id="paste-selected" class="ghost" title="粘贴到当前文件夹 (Ctrl+V)">粘贴</button>
+    <button id="rename-selected" class="ghost" title="重命名选中的项目 (F2)">重命名</button>
+    <button id="delete-action" class="ghost danger-text" title="删除选中的项目 (Delete)">删除</button>
     <button id="download" class="primary" title="下载选中的文件">下载</button>
   </div>
 
@@ -66,6 +71,7 @@
           <div class="open-title">
             我的仓库
             <span class="muted" id="myrepo-state"></span>
+            <button id="myrepo-refresh" class="link-btn hidden" type="button" title="重新拉取仓库列表">刷新</button>
           </div>
 
           <!-- 未登录时提示去设置里登录 -->
@@ -117,15 +123,25 @@
 
           <div id="account-out">
             <section id="auth-view-setup">
-              <button id="auth-start" class="primary wide">用 GitHub 登录</button>
-              <p class="muted">浏览器会打开 GitHub 授权页，把界面上显示的验证码填进去即可。</p>
-              <div class="divider"><span>或者</span></div>
-              <label class="field">
-                <span>手动填写 Personal Access Token</span>
-                <input id="auth-token" type="password" spellcheck="false"
-                       placeholder="ghp_… / github_pat_…" />
-              </label>
-              <button id="auth-save-token" class="ghost wide">使用这个 Token</button>
+              <div class="auth-tabs" role="tablist" aria-label="选择登录方式">
+                <button id="auth-tab-github" class="auth-tab active" type="button" role="tab" aria-selected="true">GitHub 登录</button>
+                <button id="auth-tab-token" class="auth-tab" type="button" role="tab" aria-selected="false">Token 登录</button>
+              </div>
+
+              <div id="auth-method-github" class="auth-method">
+                <button id="auth-start" class="primary wide">用 GitHub 登录</button>
+                <p class="muted">推荐方式。浏览器会打开 GitHub 授权页，把界面上显示的验证码填进去即可。</p>
+              </div>
+
+              <div id="auth-method-token" class="auth-method hidden">
+                <label class="field">
+                  <span>Personal Access Token</span>
+                  <input id="auth-token" type="password" spellcheck="false"
+                         placeholder="ghp_… / github_pat_…" />
+                </label>
+                <button id="auth-save-token" class="ghost wide">使用这个 Token</button>
+                <p class="muted">如果 GitHub 登录不可用，再使用 Token。两种方式任选一种即可，不需要同时填写。</p>
+              </div>
             </section>
 
             <section id="auth-view-code" class="hidden">
@@ -224,7 +240,10 @@
   <!-- ------------------------------------------------------ context menu -->
   <div id="ctx-menu" class="ctx-menu hidden"></div>
 
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast">
+    <div id="toast-text" class="toast-text"></div>
+    <button id="toast-close" class="toast-close" title="关闭">✕</button>
+  </div>
   <script src="main.js"></script>
 </body>
 </html>

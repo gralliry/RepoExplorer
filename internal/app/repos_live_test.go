@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"os"
@@ -19,7 +19,7 @@ func TestLiveListMyRepos(t *testing.T) {
 	}
 	t.Setenv("APPDATA", t.TempDir())
 
-	app := NewApp()
+	app := New()
 	if err := app.SaveManualToken(token); err != nil {
 		t.Fatalf("保存 Token 失败：%v", err)
 	}
@@ -88,7 +88,7 @@ func TestLiveCanWrite(t *testing.T) {
 	}
 	t.Setenv("APPDATA", t.TempDir())
 
-	app := NewApp()
+	app := New()
 	if err := app.SaveManualToken(token); err != nil {
 		t.Fatalf("保存 Token 失败：%v", err)
 	}

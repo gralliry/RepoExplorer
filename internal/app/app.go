@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// App is the backend. Every exported method becomes callable from the frontend
-// as window.go.main.App.<Method>(...).
+// App is the Wails backend implementation. main.App embeds this type so the
+// JavaScript binding can stay under window.go.main.App.
 type App struct {
 	ctx context.Context
 
@@ -21,13 +21,13 @@ type App struct {
 	loginCancel context.CancelFunc
 }
 
-func NewApp() *App {
+func New() *App {
 	return &App{}
 }
 
-// startup is called by Wails once the app is ready; we keep the context so the
+// Startup is called by Wails once the app is ready; we keep the context so the
 // download goroutines can talk to the runtime (progress events, dialogs).
-func (a *App) startup(ctx context.Context) {
+func Startup(a *App, ctx context.Context) {
 	a.ctx = ctx
 	a.loadAuth()
 }

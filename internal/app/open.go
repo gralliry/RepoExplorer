@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gralliry/RepoExplorer/internal/githubutil"
+	"github.com/gralliry/RepoExplorer/internal/repopath"
 )
 
 // OpenFile downloads a file from the repository into a local temp folder and
@@ -19,8 +22,8 @@ import (
 // materialises the file and lets the OS take over. The local copy is
 // throwaway: edits made there are not written back to the repository (use
 // Upload for that).
-func (a *App) OpenFile(repo, branch, repoPath string) (string, error) {
-	dest, err := a.materializeFile(repo, branch, repoPath)
+func (p githubProvider) OpenFile(a *App, repo, branch, repoPath string) (string, error) {
+	dest, err := p.materializeFile(a, repo, branch, repoPath)
 	if err != nil {
 		return "", err
 	}
@@ -33,12 +36,12 @@ func (a *App) OpenFile(repo, branch, repoPath string) (string, error) {
 // materializeFile downloads a repo file into the temp folder and returns the
 // local path. Kept unexported (and separate from OpenFile) so tests can verify
 // the download without launching a program on the developer's desktop.
-func (a *App) materializeFile(repo, branch, repoPath string) (string, error) {
-	owner, name, err := parseRepo(repo)
+func (githubProvider) materializeFile(a *App, repo, branch, repoPath string) (string, error) {
+	owner, name, err := githubutil.ParseRepo(repo)
 	if err != nil {
 		return "", err
 	}
-	target, err := cleanRepoPath(repoPath)
+	target, err := repopath.CleanPath(repoPath)
 	if err != nil {
 		return "", err
 	}

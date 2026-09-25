@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/gralliry/RepoExplorer/internal/githubutil"
+	"github.com/gralliry/RepoExplorer/internal/repopath"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -39,34 +41,11 @@ type FileContent struct {
 	TooLarge bool   `json:"tooLarge"`
 }
 
-/* ------------------------------------------------------------ path helpers */
-
-// cleanRepoDir is like cleanRepoPath but allows "" (the repository root).
-func cleanRepoDir(dir string) (string, error) {
-	dir = strings.Trim(strings.ReplaceAll(strings.TrimSpace(dir), "\\", "/"), "/")
-	if dir == "" {
-		return "", nil
-	}
-	return cleanRepoPath(dir)
-}
-
-func joinRepo(base, rel string) string {
-	base = strings.Trim(strings.ReplaceAll(base, "\\", "/"), "/")
-	rel = strings.Trim(strings.ReplaceAll(rel, "\\", "/"), "/")
-	switch {
-	case base == "":
-		return rel
-	case rel == "":
-		return base
-	default:
-		return base + "/" + rel
-	}
-}
-
-// localFilePairs expands the picked local paths (files or folders) into
-// local -> repo path pairs, skipping .git directories.
+// localFilePairs expands the picked local paths into local -> repo path pairs.
+// Single files keep their file name; folders keep their top-level folder name,
+// matching how a file manager uploads a folder.
 func localFilePairs(repoDir string, localPaths []string) ([]UploadItem, []string, error) {
-	base, err := cleanRepoDir(repoDir)
+	base, err := repopath.CleanDir(repoDir)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -79,7 +58,7 @@ func localFilePairs(repoDir string, localPaths []string) ([]UploadItem, []string
 		if err != nil {
 			return fmt.Errorf("读取本地文件失败 %s：%w", local, err)
 		}
-		items = append(items, UploadItem{Path: joinRepo(base, rel), Size: info.Size()})
+		items = append(items, UploadItem{Path: repopath.Join(base, rel), Size: info.Size()})
 		locals = append(locals, local)
 		return nil
 	}
@@ -98,6 +77,7 @@ func localFilePairs(repoDir string, localPaths []string) ([]UploadItem, []string
 		}
 
 		root := local
+		folderName := info.Name()
 		err = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
@@ -112,7 +92,7 @@ func localFilePairs(repoDir string, localPaths []string) ([]UploadItem, []string
 			if err != nil {
 				return err
 			}
-			return addFile(p, filepath.ToSlash(rel))
+			return addFile(p, filepath.ToSlash(filepath.Join(folderName, rel)))
 		})
 		if err != nil {
 			return nil, nil, err
@@ -150,12 +130,12 @@ func (a *App) PickUploadFolder() string {
 /* --------------------------------------------------------------- read file */
 
 // ReadFile returns the content of a text file so the editor can show it.
-func (a *App) ReadFile(repo, branch, filePath string) (*FileContent, error) {
-	owner, name, err := parseRepo(repo)
+func (githubProvider) ReadFile(a *App, repo, branch, filePath string) (*FileContent, error) {
+	owner, name, err := githubutil.ParseRepo(repo)
 	if err != nil {
 		return nil, err
 	}
-	target, err := cleanRepoPath(filePath)
+	target, err := repopath.CleanPath(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -211,12 +191,12 @@ func (a *App) ReadFile(repo, branch, filePath string) (*FileContent, error) {
 /* ------------------------------------------------------------------ writes */
 
 // SaveFile creates or overwrites a text file (used by the editor).
-func (a *App) SaveFile(repo, branch, filePath, content, message string) (*CommitResult, error) {
-	owner, name, err := parseRepo(repo)
+func (githubProvider) SaveFile(a *App, repo, branch, filePath, content, message string) (*CommitResult, error) {
+	owner, name, err := githubutil.ParseRepo(repo)
 	if err != nil {
 		return nil, err
 	}
-	target, err := cleanRepoPath(filePath)
+	target, err := repopath.CleanPath(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -247,15 +227,15 @@ func (a *App) SaveFile(repo, branch, filePath, content, message string) (*Commit
 }
 
 // DeletePaths removes the given repo paths in a single commit.
-func (a *App) DeletePaths(repo, branch string, paths []string, message string) (*CommitResult, error) {
-	owner, name, err := parseRepo(repo)
+func (githubProvider) DeletePaths(a *App, repo, branch string, paths []string, message string) (*CommitResult, error) {
+	owner, name, err := githubutil.ParseRepo(repo)
 	if err != nil {
 		return nil, err
 	}
 
 	targets := make([]string, 0, len(paths))
 	for _, p := range paths {
-		cleaned, err := cleanRepoPath(p)
+		cleaned, err := repopath.CleanPath(p)
 		if err != nil {
 			return nil, err
 		}
@@ -291,8 +271,8 @@ func (a *App) DeletePaths(repo, branch string, paths []string, message string) (
 
 // MovePaths renames or moves files in a single commit. Folder moves are expanded
 // by the caller into one entry per file.
-func (a *App) MovePaths(repo, branch string, moves []PathMove, message string) (*CommitResult, error) {
-	owner, name, err := parseRepo(repo)
+func (githubProvider) MovePaths(a *App, repo, branch string, moves []PathMove, message string) (*CommitResult, error) {
+	owner, name, err := githubutil.ParseRepo(repo)
 	if err != nil {
 		return nil, err
 	}
@@ -302,11 +282,11 @@ func (a *App) MovePaths(repo, branch string, moves []PathMove, message string) (
 	seenTargets := make(map[string]bool, len(moves))
 
 	for _, m := range moves {
-		from, err := cleanRepoPath(m.From)
+		from, err := repopath.CleanPath(m.From)
 		if err != nil {
 			return nil, err
 		}
-		to, err := cleanRepoPath(m.To)
+		to, err := repopath.CleanPath(m.To)
 		if err != nil {
 			return nil, err
 		}
@@ -378,8 +358,8 @@ func dirOf(p string) string {
 // the new paths simply reuse the existing blob shas, so copying a 10 MB file
 // costs the same as copying a 10 byte one. Folder copies are expanded by the
 // caller into one entry per file.
-func (a *App) CopyPaths(repo, branch string, copies []PathMove, message string) (*CommitResult, error) {
-	owner, name, err := parseRepo(repo)
+func (githubProvider) CopyPaths(a *App, repo, branch string, copies []PathMove, message string) (*CommitResult, error) {
+	owner, name, err := githubutil.ParseRepo(repo)
 	if err != nil {
 		return nil, err
 	}
@@ -389,11 +369,11 @@ func (a *App) CopyPaths(repo, branch string, copies []PathMove, message string) 
 	seenTargets := make(map[string]bool, len(copies))
 
 	for _, c := range copies {
-		from, err := cleanRepoPath(c.From)
+		from, err := repopath.CleanPath(c.From)
 		if err != nil {
 			return nil, err
 		}
-		to, err := cleanRepoPath(c.To)
+		to, err := repopath.CleanPath(c.To)
 		if err != nil {
 			return nil, err
 		}
@@ -461,8 +441,8 @@ func (a *App) PlanUpload(repoDir string, localPaths []string) ([]UploadItem, err
 
 // UploadFiles writes local files (or whole folders) into the repository as one
 // atomic commit.
-func (a *App) UploadFiles(repo, branch, repoDir string, localPaths []string, message string) (*CommitResult, error) {
-	owner, name, err := parseRepo(repo)
+func (githubProvider) UploadFiles(a *App, repo, branch, repoDir string, localPaths []string, message string) (*CommitResult, error) {
+	owner, name, err := githubutil.ParseRepo(repo)
 	if err != nil {
 		return nil, err
 	}

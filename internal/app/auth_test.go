@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"os"
@@ -11,7 +11,7 @@ func TestManualTokenRoundTrip(t *testing.T) {
 	// Redirect the config location into a throwaway directory.
 	t.Setenv("APPDATA", t.TempDir())
 
-	app := NewApp()
+	app := New()
 	if err := app.SaveManualToken(" ghp_abc "); err != nil {
 		t.Fatalf("SaveManualToken: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestManualTokenRoundTrip(t *testing.T) {
 	}
 
 	// A brand new App must pick the credential up from disk.
-	reloaded := NewApp()
+	reloaded := New()
 	reloaded.loadAuth()
 	if got := reloaded.effectiveToken(); got != "ghp_abc" {
 		t.Errorf("重新加载后 token = %q，期望去掉首尾空格的 ghp_abc", got)
@@ -35,7 +35,7 @@ func TestManualTokenRoundTrip(t *testing.T) {
 func TestClearAuth(t *testing.T) {
 	t.Setenv("APPDATA", t.TempDir())
 
-	app := NewApp()
+	app := New()
 	if err := app.SaveManualToken("ghp_abc"); err != nil {
 		t.Fatalf("SaveManualToken: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestClearAuth(t *testing.T) {
 
 func TestSaveManualTokenRejectsEmpty(t *testing.T) {
 	t.Setenv("APPDATA", t.TempDir())
-	if err := NewApp().SaveManualToken("   "); err == nil {
+	if err := New().SaveManualToken("   "); err == nil {
 		t.Error("空 Token 应该被拒绝")
 	}
 }
@@ -68,7 +68,7 @@ func TestAuthFileLocation(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("APPDATA", dir)
 
-	app := NewApp()
+	app := New()
 	if err := app.SaveManualToken("ghp_abc"); err != nil {
 		t.Fatalf("SaveManualToken: %v", err)
 	}
