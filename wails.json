@@ -1,13 +1,13 @@
 {
-  "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "RepoExplorer",
-  "outputfilename": "RepoExplorer",
-  "frontend:install": "",
-  "frontend:build": "",
-  "frontend:dev:watcher": "",
-  "frontend:dev:serverUrl": "",
-  "author": {
-    "name": "gralliry",
-    "email": "aiccyxixy@163.com"
-  }
+    "$schema": "https://wails.io/schemas/config.v2.json",
+    "name": "RepoExplorer",
+    "outputfilename": "RepoExplorer",
+    "frontend:install": "",
+    "frontend:build": "",
+    "frontend:dev:watcher": "",
+    "frontend:dev:serverUrl": "",
+    "author": {
+        "name": "gralliry",
+        "email": "aiccyxixy@163.com"
+    }
 }

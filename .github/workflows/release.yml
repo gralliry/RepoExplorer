@@ -1,136 +1,136 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version, for example v1.0.0'
-        required: true
-        default: 'v1.0.0'
+    push:
+        tags:
+            - 'v*'
+    workflow_dispatch:
+        inputs:
+            version:
+                description: 'Release version, for example v1.0.0'
+                required: true
+                default: 'v1.0.0'
 
 permissions:
-  contents: write
+    contents: write
 
 jobs:
-  build:
-    name: Build ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: windows-amd64
-            os: windows-latest
-            platform: windows/amd64
-            archive: zip
-            binary: RepoExplorer.exe
-          - name: windows-arm64
-            os: windows-latest
-            platform: windows/arm64
-            archive: zip
-            binary: RepoExplorer.exe
-          - name: linux-amd64
-            os: ubuntu-22.04
-            platform: linux/amd64
-            archive: tar.gz
-            binary: RepoExplorer
-          - name: linux-arm64
-            os: ubuntu-22.04-arm
-            platform: linux/arm64
-            archive: tar.gz
-            binary: RepoExplorer
-          - name: macos-amd64
-            os: macos-13
-            platform: darwin/amd64
-            archive: zip
-            app: RepoExplorer.app
-          - name: macos-arm64
-            os: macos-14
-            platform: darwin/arm64
-            archive: zip
-            app: RepoExplorer.app
+    build:
+        name: Build ${{ matrix.name }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - name: windows-amd64
+                        os: windows-latest
+                        platform: windows/amd64
+                        archive: zip
+                        binary: RepoExplorer.exe
+                    - name: windows-arm64
+                        os: windows-latest
+                        platform: windows/arm64
+                        archive: zip
+                        binary: RepoExplorer.exe
+                    - name: linux-amd64
+                        os: ubuntu-22.04
+                        platform: linux/amd64
+                        archive: tar.gz
+                        binary: RepoExplorer
+                    - name: linux-arm64
+                        os: ubuntu-22.04-arm
+                        platform: linux/arm64
+                        archive: tar.gz
+                        binary: RepoExplorer
+                    - name: macos-amd64
+                        os: macos-13
+                        platform: darwin/amd64
+                        archive: zip
+                        app: RepoExplorer.app
+                    - name: macos-arm64
+                        os: macos-14
+                        platform: darwin/arm64
+                        archive: zip
+                        app: RepoExplorer.app
 
-    runs-on: ${{ matrix.os }}
-    env:
-      RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        runs-on: ${{ matrix.os }}
+        env:
+            RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+        steps:
+            - name: Checkout
+                uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
+            - name: Set up Go
+                uses: actions/setup-go@v5
+                with:
+                    go-version-file: go.mod
+                    cache: true
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev pkg-config
+            - name: Install Linux dependencies
+                if: runner.os == 'Linux'
+                run: |
+                    sudo apt-get update
+                    sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev pkg-config
 
-      - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+            - name: Install Wails CLI
+                run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
-      - name: Build application
-        run: wails build -clean -platform ${{ matrix.platform }}
+            - name: Build application
+                run: wails build -clean -platform ${{ matrix.platform }}
 
-      - name: Package Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path "build/bin/${{ matrix.binary }}" -DestinationPath "dist/RepoExplorer-${env:RELEASE_VERSION}-${{ matrix.name }}.zip" -Force
+            - name: Package Windows
+                if: runner.os == 'Windows'
+                shell: pwsh
+                run: |
+                    New-Item -ItemType Directory -Force dist | Out-Null
+                    Compress-Archive -Path "build/bin/${{ matrix.binary }}" -DestinationPath "dist/RepoExplorer-${env:RELEASE_VERSION}-${{ matrix.name }}.zip" -Force
 
-      - name: Package Linux
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p dist package/RepoExplorer
-          cp "build/bin/${{ matrix.binary }}" package/RepoExplorer/
-          chmod +x package/RepoExplorer/${{ matrix.binary }}
-          tar -czf "dist/RepoExplorer-${RELEASE_VERSION}-${{ matrix.name }}.tar.gz" -C package RepoExplorer
+            - name: Package Linux
+                if: runner.os == 'Linux'
+                run: |
+                    mkdir -p dist package/RepoExplorer
+                    cp "build/bin/${{ matrix.binary }}" package/RepoExplorer/
+                    chmod +x package/RepoExplorer/${{ matrix.binary }}
+                    tar -czf "dist/RepoExplorer-${RELEASE_VERSION}-${{ matrix.name }}.tar.gz" -C package RepoExplorer
 
-      - name: Package macOS
-        if: runner.os == 'macOS'
-        run: |
-          mkdir -p dist
-          ditto -c -k --sequesterRsrc --keepParent "build/bin/${{ matrix.app }}" "dist/RepoExplorer-${RELEASE_VERSION}-${{ matrix.name }}.zip"
+            - name: Package macOS
+                if: runner.os == 'macOS'
+                run: |
+                    mkdir -p dist
+                    ditto -c -k --sequesterRsrc --keepParent "build/bin/${{ matrix.app }}" "dist/RepoExplorer-${RELEASE_VERSION}-${{ matrix.name }}.zip"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: RepoExplorer-${{ matrix.name }}
-          path: dist/*
-          if-no-files-found: error
+            - name: Upload artifact
+                uses: actions/upload-artifact@v4
+                with:
+                    name: RepoExplorer-${{ matrix.name }}
+                    path: dist/*
+                    if-no-files-found: error
 
-  release:
-    name: Publish GitHub Release
-    needs: build
-    runs-on: ubuntu-latest
+    release:
+        name: Publish GitHub Release
+        needs: build
+        runs-on: ubuntu-latest
 
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
+        steps:
+            - name: Download artifacts
+                uses: actions/download-artifact@v4
+                with:
+                    path: dist
+                    merge-multiple: true
 
-      - name: Resolve release version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          fi
+            - name: Resolve release version
+                id: version
+                run: |
+                    if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+                        echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+                    else
+                        echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+                    fi
 
-      - name: Create or update release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.value }}
-          name: RepoExplorer ${{ steps.version.outputs.value }}
-          files: dist/*
-          generate_release_notes: true
+            - name: Create or update release
+                uses: softprops/action-gh-release@v2
+                with:
+                    tag_name: ${{ steps.version.outputs.value }}
+                    name: RepoExplorer ${{ steps.version.outputs.value }}
+                    files: dist/*
+                    generate_release_notes: true

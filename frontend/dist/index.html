@@ -1,249 +1,249 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RepoExplorer</title>
-  <link rel="stylesheet" href="styles.css" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RepoExplorer</title>
+    <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <!-- 仓库选择 -->
-  <header class="toolbar">
-    <div class="field grow">
-      <span>当前仓库</span>
-      <div id="repo-display" class="repo-display" title="点右侧「打开仓库」切换">
-        <span id="repo-name">尚未打开仓库</span>
-      </div>
-    </div>
-    <label class="field">
-      <span>分支</span>
-      <select id="ref"><option value="">默认分支</option></select>
-    </label>
-    <button id="load" class="primary">打开仓库</button>
-    <button id="settings-btn" class="nav-btn" title="设置">⚙</button>
-  </header>
-
-  <!-- 地址栏 / 工具栏 -->
-  <div class="navbar">
-    <button id="nav-back" class="nav-btn" title="后退 (Alt+←)">←</button>
-    <button id="nav-forward" class="nav-btn" title="前进 (Alt+→)">→</button>
-    <button id="nav-up" class="nav-btn" title="上一级 (Backspace)">↑</button>
-
-    <div id="breadcrumb" class="breadcrumb" title="点击可编辑完整路径"></div>
-
-    <input id="filter" type="search" class="nav-search" placeholder="搜索文件（递归整个仓库）" />
-
-    <button id="refresh" class="ghost" title="刷新 (F5)">刷新</button>
-    <button id="new-menu" class="ghost" title="新建">新建 ▾</button>
-    <button id="upload-menu" class="ghost" title="上传">上传 ▾</button>
-    <button id="select-all" class="ghost" title="进入选择模式">选择</button>
-    <button id="copy-selected" class="ghost" title="复制选中的项目 (Ctrl+C)">复制</button>
-    <button id="cut-selected" class="ghost" title="剪切选中的项目 (Ctrl+X)">剪切</button>
-    <button id="paste-selected" class="ghost" title="粘贴到当前文件夹 (Ctrl+V)">粘贴</button>
-    <button id="rename-selected" class="ghost" title="重命名选中的项目 (F2)">重命名</button>
-    <button id="delete-action" class="ghost danger-text" title="删除选中的项目 (Delete)">删除</button>
-    <button id="download" class="primary" title="下载选中的文件">下载</button>
-  </div>
-
-  <!-- 内容区 -->
-  <main class="content">
-    <div id="list" class="list">
-      <div class="empty">输入仓库后点「打开仓库」<br />加载完成后，双击文件夹进入，双击文件编辑</div>
-    </div>
-  </main>
-
-  <!-- 状态栏 -->
-  <footer class="statusbar">
-    <span id="status-items">尚未加载仓库</span>
-    <span id="status-progress" class="status-progress"></span>
-  </footer>
-
-  <!-- ------------------------------------------------------ open repo modal -->
-  <div id="open-modal" class="modal-backdrop hidden">
-    <div class="modal open-modal">
-      <div class="modal-head">
-        <span>打开仓库</span>
-        <button id="open-close" class="icon-btn" title="关闭">✕</button>
-      </div>
-
-      <div class="modal-body">
-        <section class="open-section">
-          <div class="open-title">
-            我的仓库
-            <span class="muted" id="myrepo-state"></span>
-            <button id="myrepo-refresh" class="link-btn hidden" type="button" title="重新拉取仓库列表">刷新</button>
-          </div>
-
-          <!-- 未登录时提示去设置里登录 -->
-          <div id="auth-box" class="hidden">
-            <p class="muted">未登录，只能打开公开仓库。</p>
-            <button id="picker-to-settings" class="ghost wide">去设置里登录</button>
-          </div>
-
-          <!-- 已登录时显示仓库列表 -->
-          <div id="myrepo-box">
-            <input id="myrepo-search" type="search" placeholder="搜索我的仓库…" />
-            <div id="myrepo-list" class="repo-list"></div>
-          </div>
-        </section>
-
-        <div class="divider"><span>或者</span></div>
-
-        <section class="open-section">
-          <div class="open-title">公开仓库</div>
-          <div class="manual-row">
-            <input id="manual-repo" type="text" spellcheck="false"
-                   placeholder="owner/repo 或 https://github.com/owner/repo" />
-            <button id="manual-open" class="primary">打开</button>
-          </div>
-          <p class="muted">公开仓库只有下载功能，不能新建、上传、编辑、重命名或删除。</p>
-        </section>
-      </div>
-    </div>
-  </div>
-
-  <!-- ------------------------------------------------------ settings modal -->
-  <div id="settings-modal" class="modal-backdrop hidden">
-    <div class="modal">
-      <div class="modal-head">
-        <span>设置</span>
-        <button id="settings-close" class="icon-btn" title="关闭">✕</button>
-      </div>
-
-      <div class="modal-body">
-        <!-- 账号 -->
-        <section class="open-section">
-          <div class="open-title">账号 <span class="muted" id="account-state"></span></div>
-
-          <div id="account-in" class="hidden">
-            <div class="auth-user" id="account-name">—</div>
-            <div class="muted" id="account-source"></div>
-            <button id="auth-logout" class="ghost wide">退出登录</button>
-          </div>
-
-          <div id="account-out">
-            <section id="auth-view-setup">
-              <div class="auth-tabs" role="tablist" aria-label="选择登录方式">
-                <button id="auth-tab-github" class="auth-tab active" type="button" role="tab" aria-selected="true">GitHub 登录</button>
-                <button id="auth-tab-token" class="auth-tab" type="button" role="tab" aria-selected="false">Token 登录</button>
-              </div>
-
-              <div id="auth-method-github" class="auth-method">
-                <button id="auth-start" class="primary wide">用 GitHub 登录</button>
-                <p class="muted">推荐方式。浏览器会打开 GitHub 授权页，把界面上显示的验证码填进去即可。</p>
-              </div>
-
-              <div id="auth-method-token" class="auth-method hidden">
-                <label class="field">
-                  <span>Personal Access Token</span>
-                  <input id="auth-token" type="password" spellcheck="false"
-                         placeholder="ghp_… / github_pat_…" />
-                </label>
-                <button id="auth-save-token" class="ghost wide">使用这个 Token</button>
-                <p class="muted">如果 GitHub 登录不可用，再使用 Token。两种方式任选一种即可，不需要同时填写。</p>
-              </div>
-            </section>
-
-            <section id="auth-view-code" class="hidden">
-              <p class="muted">浏览器里应该已经打开了授权页面。在那里输入下面的验证码：</p>
-              <div class="code-row">
-                <span id="auth-user-code" class="user-code">········</span>
-                <button id="auth-copy" class="ghost">复制</button>
-              </div>
-              <p class="muted" id="auth-code-status">等待你在浏览器中授权…</p>
-              <div class="row-btns">
-                <button id="auth-open" class="ghost">重新打开浏览器</button>
-                <button id="auth-cancel" class="ghost">取消</button>
-              </div>
-            </section>
-          </div>
-        </section>
-
-        <div class="divider"></div>
-
-        <!-- 下载 -->
-        <section class="open-section">
-          <div class="open-title">下载</div>
-          <label class="field">
-            <span>下载目录</span>
-            <div class="manual-row">
-              <input id="settings-dest" type="text" readonly placeholder="尚未选择" />
-              <button id="settings-pick-dest" class="ghost">选择…</button>
+    <!-- 仓库选择 -->
+    <header class="toolbar">
+        <div class="field grow">
+            <span>当前仓库</span>
+            <div id="repo-display" class="repo-display" title="点右侧「打开仓库」切换">
+                <span id="repo-name">尚未打开仓库</span>
             </div>
-          </label>
-          <p class="muted">下载选中文件时的保存位置。留空则第一次下载时再问你。</p>
-        </section>
-
-        <div class="divider"></div>
-
-        <!-- 打开文件 -->
-        <section class="open-section">
-          <div class="open-title">打开文件</div>
-          <p class="muted">
-            双击文件会先下载到下面这个目录，再交给系统默认程序打开。
-            程序自己不预览、不编辑，本地改动也不会写回仓库。
-          </p>
-          <div class="manual-row">
-            <input id="settings-temp" type="text" readonly />
-            <button id="settings-open-temp" class="ghost">打开目录</button>
-          </div>
-        </section>
-      </div>
-    </div>
-  </div>
-
-  <!-- ------------------------------------------------------- prompt modal -->
-  <div id="prompt-modal" class="modal-backdrop hidden">
-    <div class="modal narrow">
-      <div class="modal-head">
-        <span id="prompt-title">输入</span>
-        <button id="prompt-close" class="icon-btn" title="关闭">✕</button>
-      </div>
-      <div class="modal-body">
-        <p class="muted" id="prompt-hint"></p>
+        </div>
         <label class="field">
-          <span id="prompt-label">名称</span>
-          <input id="prompt-input" type="text" spellcheck="false" />
+            <span>分支</span>
+            <select id="ref"><option value="">默认分支</option></select>
         </label>
-        <div id="prompt-extra-wrap" class="hidden">
-          <label class="field">
-            <span id="prompt-extra-label">内容</span>
-            <textarea id="prompt-extra" class="editor short" spellcheck="false"></textarea>
-          </label>
-        </div>
-        <div class="row-btns">
-          <button id="prompt-cancel" class="ghost">取消</button>
-          <button id="prompt-ok" class="primary">确定</button>
-        </div>
-      </div>
+        <button id="load" class="primary">打开仓库</button>
+        <button id="settings-btn" class="nav-btn" title="设置">⚙</button>
+    </header>
+
+    <!-- 地址栏 / 工具栏 -->
+    <div class="navbar">
+        <button id="nav-back" class="nav-btn" title="后退 (Alt+←)">←</button>
+        <button id="nav-forward" class="nav-btn" title="前进 (Alt+→)">→</button>
+        <button id="nav-up" class="nav-btn" title="上一级 (Backspace)">↑</button>
+
+        <div id="breadcrumb" class="breadcrumb" title="点击可编辑完整路径"></div>
+
+        <input id="filter" type="search" class="nav-search" placeholder="搜索文件（递归整个仓库）" />
+
+        <button id="refresh" class="ghost" title="刷新 (F5)">刷新</button>
+        <button id="new-menu" class="ghost" title="新建">新建 ▾</button>
+        <button id="upload-menu" class="ghost" title="上传">上传 ▾</button>
+        <button id="select-all" class="ghost" title="进入选择模式">选择</button>
+        <button id="copy-selected" class="ghost" title="复制选中的项目 (Ctrl+C)">复制</button>
+        <button id="cut-selected" class="ghost" title="剪切选中的项目 (Ctrl+X)">剪切</button>
+        <button id="paste-selected" class="ghost" title="粘贴到当前文件夹 (Ctrl+V)">粘贴</button>
+        <button id="rename-selected" class="ghost" title="重命名选中的项目 (F2)">重命名</button>
+        <button id="delete-action" class="ghost danger-text" title="删除选中的项目 (Delete)">删除</button>
+        <button id="download" class="primary" title="下载选中的文件">下载</button>
     </div>
-  </div>
 
-  <!-- ------------------------------------------------------ confirm modal -->
-  <div id="confirm-modal" class="modal-backdrop hidden">
-    <div class="modal">
-      <div class="modal-head">
-        <span id="confirm-title">确认</span>
-        <button id="confirm-close" class="icon-btn" title="关闭">✕</button>
-      </div>
-      <div class="modal-body">
-        <p class="muted" id="confirm-message"></p>
-        <div id="confirm-list" class="change-list"></div>
-        <div class="row-btns">
-          <button id="confirm-cancel" class="ghost">取消</button>
-          <button id="confirm-ok" class="primary danger">确认</button>
+    <!-- 内容区 -->
+    <main class="content">
+        <div id="list" class="list">
+            <div class="empty">输入仓库后点「打开仓库」<br />加载完成后，双击文件夹进入，双击文件编辑</div>
         </div>
-      </div>
+    </main>
+
+    <!-- 状态栏 -->
+    <footer class="statusbar">
+        <span id="status-items">尚未加载仓库</span>
+        <span id="status-progress" class="status-progress"></span>
+    </footer>
+
+    <!-- ------------------------------------------------------ open repo modal -->
+    <div id="open-modal" class="modal-backdrop hidden">
+        <div class="modal open-modal">
+            <div class="modal-head">
+                <span>打开仓库</span>
+                <button id="open-close" class="icon-btn" title="关闭">✕</button>
+            </div>
+
+            <div class="modal-body">
+                <section class="open-section">
+                    <div class="open-title">
+                        我的仓库
+                        <span class="muted" id="myrepo-state"></span>
+                        <button id="myrepo-refresh" class="link-btn hidden" type="button" title="重新拉取仓库列表">刷新</button>
+                    </div>
+
+                    <!-- 未登录时提示去设置里登录 -->
+                    <div id="auth-box" class="hidden">
+                        <p class="muted">未登录，只能打开公开仓库。</p>
+                        <button id="picker-to-settings" class="ghost wide">去设置里登录</button>
+                    </div>
+
+                    <!-- 已登录时显示仓库列表 -->
+                    <div id="myrepo-box">
+                        <input id="myrepo-search" type="search" placeholder="搜索我的仓库…" />
+                        <div id="myrepo-list" class="repo-list"></div>
+                    </div>
+                </section>
+
+                <div class="divider"><span>或者</span></div>
+
+                <section class="open-section">
+                    <div class="open-title">公开仓库</div>
+                    <div class="manual-row">
+                        <input id="manual-repo" type="text" spellcheck="false"
+                                      placeholder="owner/repo 或 https://github.com/owner/repo" />
+                        <button id="manual-open" class="primary">打开</button>
+                    </div>
+                    <p class="muted">公开仓库只有下载功能，不能新建、上传、编辑、重命名或删除。</p>
+                </section>
+            </div>
+        </div>
     </div>
-  </div>
 
-  <!-- ------------------------------------------------------ context menu -->
-  <div id="ctx-menu" class="ctx-menu hidden"></div>
+    <!-- ------------------------------------------------------ settings modal -->
+    <div id="settings-modal" class="modal-backdrop hidden">
+        <div class="modal">
+            <div class="modal-head">
+                <span>设置</span>
+                <button id="settings-close" class="icon-btn" title="关闭">✕</button>
+            </div>
 
-  <div id="toast" class="toast">
-    <div id="toast-text" class="toast-text"></div>
-    <button id="toast-close" class="toast-close" title="关闭">✕</button>
-  </div>
-  <script src="main.js"></script>
+            <div class="modal-body">
+                <!-- 账号 -->
+                <section class="open-section">
+                    <div class="open-title">账号 <span class="muted" id="account-state"></span></div>
+
+                    <div id="account-in" class="hidden">
+                        <div class="auth-user" id="account-name">—</div>
+                        <div class="muted" id="account-source"></div>
+                        <button id="auth-logout" class="ghost wide">退出登录</button>
+                    </div>
+
+                    <div id="account-out">
+                        <section id="auth-view-setup">
+                            <div class="auth-tabs" role="tablist" aria-label="选择登录方式">
+                                <button id="auth-tab-github" class="auth-tab active" type="button" role="tab" aria-selected="true">GitHub 登录</button>
+                                <button id="auth-tab-token" class="auth-tab" type="button" role="tab" aria-selected="false">Token 登录</button>
+                            </div>
+
+                            <div id="auth-method-github" class="auth-method">
+                                <button id="auth-start" class="primary wide">用 GitHub 登录</button>
+                                <p class="muted">推荐方式。浏览器会打开 GitHub 授权页，把界面上显示的验证码填进去即可。</p>
+                            </div>
+
+                            <div id="auth-method-token" class="auth-method hidden">
+                                <label class="field">
+                                    <span>Personal Access Token</span>
+                                    <input id="auth-token" type="password" spellcheck="false"
+                                                  placeholder="ghp_… / github_pat_…" />
+                                </label>
+                                <button id="auth-save-token" class="ghost wide">使用这个 Token</button>
+                                <p class="muted">如果 GitHub 登录不可用，再使用 Token。两种方式任选一种即可，不需要同时填写。</p>
+                            </div>
+                        </section>
+
+                        <section id="auth-view-code" class="hidden">
+                            <p class="muted">浏览器里应该已经打开了授权页面。在那里输入下面的验证码：</p>
+                            <div class="code-row">
+                                <span id="auth-user-code" class="user-code">········</span>
+                                <button id="auth-copy" class="ghost">复制</button>
+                            </div>
+                            <p class="muted" id="auth-code-status">等待你在浏览器中授权…</p>
+                            <div class="row-btns">
+                                <button id="auth-open" class="ghost">重新打开浏览器</button>
+                                <button id="auth-cancel" class="ghost">取消</button>
+                            </div>
+                        </section>
+                    </div>
+                </section>
+
+                <div class="divider"></div>
+
+                <!-- 下载 -->
+                <section class="open-section">
+                    <div class="open-title">下载</div>
+                    <label class="field">
+                        <span>下载目录</span>
+                        <div class="manual-row">
+                            <input id="settings-dest" type="text" readonly placeholder="尚未选择" />
+                            <button id="settings-pick-dest" class="ghost">选择…</button>
+                        </div>
+                    </label>
+                    <p class="muted">下载选中文件时的保存位置。留空则第一次下载时再问你。</p>
+                </section>
+
+                <div class="divider"></div>
+
+                <!-- 打开文件 -->
+                <section class="open-section">
+                    <div class="open-title">打开文件</div>
+                    <p class="muted">
+                        双击文件会先下载到下面这个目录，再交给系统默认程序打开。
+                        程序自己不预览、不编辑，本地改动也不会写回仓库。
+                    </p>
+                    <div class="manual-row">
+                        <input id="settings-temp" type="text" readonly />
+                        <button id="settings-open-temp" class="ghost">打开目录</button>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <!-- ------------------------------------------------------- prompt modal -->
+    <div id="prompt-modal" class="modal-backdrop hidden">
+        <div class="modal narrow">
+            <div class="modal-head">
+                <span id="prompt-title">输入</span>
+                <button id="prompt-close" class="icon-btn" title="关闭">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="muted" id="prompt-hint"></p>
+                <label class="field">
+                    <span id="prompt-label">名称</span>
+                    <input id="prompt-input" type="text" spellcheck="false" />
+                </label>
+                <div id="prompt-extra-wrap" class="hidden">
+                    <label class="field">
+                        <span id="prompt-extra-label">内容</span>
+                        <textarea id="prompt-extra" class="editor short" spellcheck="false"></textarea>
+                    </label>
+                </div>
+                <div class="row-btns">
+                    <button id="prompt-cancel" class="ghost">取消</button>
+                    <button id="prompt-ok" class="primary">确定</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ------------------------------------------------------ confirm modal -->
+    <div id="confirm-modal" class="modal-backdrop hidden">
+        <div class="modal">
+            <div class="modal-head">
+                <span id="confirm-title">确认</span>
+                <button id="confirm-close" class="icon-btn" title="关闭">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="muted" id="confirm-message"></p>
+                <div id="confirm-list" class="change-list"></div>
+                <div class="row-btns">
+                    <button id="confirm-cancel" class="ghost">取消</button>
+                    <button id="confirm-ok" class="primary danger">确认</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ------------------------------------------------------ context menu -->
+    <div id="ctx-menu" class="ctx-menu hidden"></div>
+
+    <div id="toast" class="toast">
+        <div id="toast-text" class="toast-text"></div>
+        <button id="toast-close" class="toast-close" title="关闭">✕</button>
+    </div>
+    <script src="main.js"></script>
 </body>
 </html>
