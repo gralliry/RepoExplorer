@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -65,6 +67,7 @@ type CommitResult struct {
 	SHA     string `json:"sha"`
 	Message string `json:"message"`
 	Changes int    `json:"changes"`
+	Commits int    `json:"commits"`
 }
 
 // PlannedChange describes one file an operation is about to touch. The UI uses
@@ -219,6 +222,204 @@ func createBlob(ctx context.Context, client *http.Client, owner, repo, token str
 	return out.SHA, nil
 }
 
+func readGitBlob(ctx context.Context, client *http.Client, owner, repo, token, sha string) ([]byte, error) {
+	var blob struct {
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+	}
+	url := fmt.Sprintf("%s/repos/%s/%s/git/blobs/%s", apiBase, owner, repo, sha)
+	if err := apiGet(ctx, client, url, token, &blob); err != nil {
+		return nil, err
+	}
+	if blob.Encoding != "base64" {
+		return nil, fmt.Errorf("不支持的 blob 编码：%s", blob.Encoding)
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(blob.Content, "\n", ""))
+	if err != nil {
+		return nil, fmt.Errorf("解码 blob 失败：%w", err)
+	}
+	return data, nil
+}
+
+func lfsPointer(oid string, size int64) []byte {
+	return []byte(fmt.Sprintf("version https://git-lfs.github.com/spec/v1\noid sha256:%s\nsize %d\n", oid, size))
+}
+
+func uploadLFSObject(ctx context.Context, client *http.Client, owner, repo, token, localPath string) ([]byte, error) {
+	data, err := readLocalFile(localPath)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(data)
+	oid := fmt.Sprintf("%x", sum[:])
+	size := int64(len(data))
+
+	payload := struct {
+		Operation string   `json:"operation"`
+		Transfers []string `json:"transfers"`
+		Objects   []struct {
+			OID  string `json:"oid"`
+			Size int64  `json:"size"`
+		} `json:"objects"`
+	}{Operation: "upload", Transfers: []string{"basic"}}
+	payload.Objects = append(payload.Objects, struct {
+		OID  string `json:"oid"`
+		Size int64  `json:"size"`
+	}{OID: oid, Size: size})
+
+	var out struct {
+		Objects []struct {
+			OID     string `json:"oid"`
+			Size    int64  `json:"size"`
+			Actions struct {
+				Upload *struct {
+					Href   string            `json:"href"`
+					Header map[string]string `json:"header"`
+				} `json:"upload"`
+			} `json:"actions"`
+			Error *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"objects"`
+	}
+	url := fmt.Sprintf("https://github.com/%s/%s.git/info/lfs/objects/batch", owner, repo)
+	payloadData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payloadData))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.git-lfs+json")
+	req.Header.Set("Content-Type", "application/vnd.git-lfs+json")
+	req.Header.Set("User-Agent", userAgent)
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Git LFS 请求失败：%w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取 Git LFS 响应失败：%w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("Git LFS 请求失败：%s", humanizeAPIError(resp.StatusCode, string(body)))
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("解析 Git LFS 响应失败：%w", err)
+	}
+	if len(out.Objects) == 0 {
+		return nil, fmt.Errorf("Git LFS 没有返回上传信息")
+	}
+	obj := out.Objects[0]
+	if obj.Error != nil {
+		return nil, fmt.Errorf("Git LFS 拒绝上传：%s", obj.Error.Message)
+	}
+	if obj.Actions.Upload != nil {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, obj.Actions.Upload.Href, bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range obj.Actions.Upload.Header {
+			req.Header.Set(k, v)
+		}
+		if req.Header.Get("Content-Type") == "" {
+			req.Header.Set("Content-Type", "application/octet-stream")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("Git LFS 上传失败：%w", err)
+		}
+		defer resp.Body.Close()
+		uploadBody, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			return nil, fmt.Errorf("Git LFS 上传失败：%s", humanizeAPIError(resp.StatusCode, string(uploadBody)))
+		}
+	}
+	return lfsPointer(oid, size), nil
+}
+
+func lfsAttributePattern(path string) string {
+	path = strings.ReplaceAll(path, "\\", "\\\\")
+	path = strings.ReplaceAll(path, " ", "\\ ")
+	return path
+}
+
+func lfsAttributesContent(existing []byte, paths []string) ([]byte, bool) {
+	lines := strings.Split(string(existing), "\n")
+	hasPattern := func(pattern string) bool {
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == pattern || strings.HasPrefix(line, pattern+" ") || strings.HasPrefix(line, pattern+"\t") {
+				return true
+			}
+		}
+		return false
+	}
+
+	var b strings.Builder
+	b.Write(existing)
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		b.WriteByte('\n')
+	}
+	changed := false
+	for _, path := range paths {
+		pattern := lfsAttributePattern(path)
+		if hasPattern(pattern) {
+			continue
+		}
+		b.WriteString(pattern)
+		b.WriteString(" filter=lfs diff=lfs merge=lfs -text\n")
+		lines = append(lines, pattern+" filter=lfs diff=lfs merge=lfs -text")
+		changed = true
+	}
+	if !changed {
+		return existing, false
+	}
+	return []byte(b.String()), true
+}
+
+func lfsAttributesChange(ctx context.Context, client *http.Client, owner, repo, token string, index map[string]remoteEntry, paths []string) (*treeChange, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	var existing []byte
+	if entry, ok := index[".gitattributes"]; ok {
+		data, err := readGitBlob(ctx, client, owner, repo, token, entry.SHA)
+		if err != nil {
+			return nil, err
+		}
+		existing = data
+	}
+	content, changed := lfsAttributesContent(existing, paths)
+	if !changed {
+		return nil, nil
+	}
+	return &treeChange{Path: ".gitattributes", Mode: "100644", Source: &contentSource{inline: content}}, nil
+}
+
+func gitContentForUpload(ctx context.Context, client *http.Client, owner, repo, token, target string, source *contentSource) ([]byte, error) {
+	if source == nil {
+		return nil, fmt.Errorf("内部错误：缺少文件内容")
+	}
+	if source.inline != nil {
+		return source.inline, nil
+	}
+	info, err := os.Stat(source.local)
+	if err != nil {
+		return nil, fmt.Errorf("读取本地文件失败 %s：%w", source.local, err)
+	}
+	if info.Size() > maxDirectGitBlobSize {
+		return uploadLFSObject(ctx, client, owner, repo, token, source.local)
+	}
+	return readLocalFile(source.local)
+}
+
 // changePlanner builds the concrete path changes once the current repo tree is
 // known. It is a callback so that moves can reuse existing blob shas without a
 // second round trip.
@@ -297,7 +498,7 @@ func (a *App) commitChanges(owner, repo, branch string, describe func(index map[
 
 		sha := ch.BlobSHA
 		if sha == "" {
-			content, err := ch.Source.bytes()
+			content, err := gitContentForUpload(ctx, client, owner, repo, token, target, ch.Source)
 			if err != nil {
 				return nil, err
 			}
@@ -355,7 +556,180 @@ func (a *App) commitChanges(owner, repo, branch string, describe func(index map[
 	done++
 	emit(done, total, "完成")
 
-	return &CommitResult{SHA: commitOut.SHA, Message: message, Changes: len(changes)}, nil
+	return &CommitResult{SHA: commitOut.SHA, Message: message, Changes: len(changes), Commits: 1}, nil
+}
+
+// commitStagedUpload writes a large upload through a temporary repository
+// directory, then publishes all staged files to their real paths in one final
+// commit. The destination paths are never partially updated.
+func (a *App) commitStagedUpload(owner, repo, branch string, uploadEntries []uploadEntry, message string) (*CommitResult, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	emit := func(done, total int, current string) {
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "task-progress", Progress{Done: done, Total: total, Current: current})
+		}
+	}
+	client := newHTTPClient(120 * time.Second)
+	token := a.effectiveToken()
+	if token == "" {
+		return nil, fmt.Errorf("写操作需要授权：请点右上角「认证」登录 GitHub")
+	}
+
+	emit(0, 1, "读取分支信息…")
+	headSHA, treeSHA, err := branchHead(ctx, client, owner, repo, branch, token)
+	if err != nil {
+		return nil, err
+	}
+	emit(0, 1, "读取仓库文件列表…")
+	index, err := treeIndex(ctx, client, owner, repo, treeSHA, token)
+	if err != nil {
+		return nil, err
+	}
+
+	summary := uploadMessage(uploadEntries, index, message)
+	var lfsPaths []string
+	for _, e := range uploadEntries {
+		if e.size > maxDirectGitBlobSize {
+			lfsPaths = append(lfsPaths, e.repoPath)
+		}
+	}
+	tempRoot := fmt.Sprintf(".repoexplorer-upload/%d", time.Now().UnixNano())
+	for path := range index {
+		if path == tempRoot || strings.HasPrefix(path, tempRoot+"/") {
+			return nil, fmt.Errorf("临时上传目录已存在：%s", tempRoot)
+		}
+	}
+
+	batchCount := (len(uploadEntries) + maxUploadFilesPerCommit - 1) / maxUploadFilesPerCommit
+	total := len(uploadEntries) + batchCount*3 + 3
+	done := 0
+	commits := 0
+	var lastSHA string
+
+	commitTree := func(entries []treeEntryRequest, commitMessage, progress string) error {
+		emit(done, total, progress+"：创建文件树…")
+		var treeOut struct {
+			SHA string `json:"sha"`
+		}
+		treePayload := struct {
+			BaseTree string             `json:"base_tree"`
+			Tree     []treeEntryRequest `json:"tree"`
+		}{BaseTree: treeSHA, Tree: entries}
+		treeURL := fmt.Sprintf("%s/repos/%s/%s/git/trees", apiBase, owner, repo)
+		if err := apiSend(ctx, client, http.MethodPost, treeURL, token, treePayload, &treeOut); err != nil {
+			return err
+		}
+		done++
+		emit(done, total, progress+"：创建提交…")
+
+		var commitOut struct {
+			SHA string `json:"sha"`
+		}
+		commitPayload := struct {
+			Message string   `json:"message"`
+			Tree    string   `json:"tree"`
+			Parents []string `json:"parents"`
+		}{Message: commitMessage, Tree: treeOut.SHA, Parents: []string{headSHA}}
+		commitURL := fmt.Sprintf("%s/repos/%s/%s/git/commits", apiBase, owner, repo)
+		if err := apiSend(ctx, client, http.MethodPost, commitURL, token, commitPayload, &commitOut); err != nil {
+			return err
+		}
+		done++
+		emit(done, total, progress+"：更新分支…")
+
+		refPayload := struct {
+			SHA   string `json:"sha"`
+			Force bool   `json:"force"`
+		}{SHA: commitOut.SHA, Force: false}
+		refURL := fmt.Sprintf("%s/repos/%s/%s/git/refs/heads/%s", apiBase, owner, repo, githubutil.EscapeRef(branch))
+		if err := apiSend(ctx, client, http.MethodPatch, refURL, token, refPayload, nil); err != nil {
+			return err
+		}
+		done++
+
+		headSHA = commitOut.SHA
+		treeSHA = treeOut.SHA
+		lastSHA = commitOut.SHA
+		commits++
+		return nil
+	}
+
+	for start, batch := 0, 1; start < len(uploadEntries); start, batch = start+maxUploadFilesPerCommit, batch+1 {
+		end := start + maxUploadFilesPerCommit
+		if end > len(uploadEntries) {
+			end = len(uploadEntries)
+		}
+		entries := make([]treeEntryRequest, 0, end-start)
+		for _, e := range uploadEntries[start:end] {
+			tempPath := repopath.Join(tempRoot, e.repoPath)
+			var content []byte
+			if e.size > maxDirectGitBlobSize {
+				content, err = uploadLFSObject(ctx, client, owner, repo, token, e.local)
+			} else {
+				content, err = readLocalFile(e.local)
+			}
+			if err != nil {
+				return nil, err
+			}
+			sha, err := createBlob(ctx, client, owner, repo, token, content)
+			if err != nil {
+				return nil, err
+			}
+			done++
+			emit(done, total, fmt.Sprintf("第 %d/%d 批：暂存 %s", batch, batchCount, e.repoPath))
+			entries = append(entries, treeEntryRequest{Path: tempPath, Mode: "100644", Type: "blob", SHA: &sha})
+		}
+
+		batchMessage := fmt.Sprintf("Stage upload files (%d/%d)", batch, batchCount)
+		if err := commitTree(entries, batchMessage, fmt.Sprintf("第 %d/%d 批", batch, batchCount)); err != nil {
+			return nil, err
+		}
+	}
+
+	emit(done, total, "准备发布上传内容…")
+	stagedIndex, err := treeIndex(ctx, client, owner, repo, treeSHA, token)
+	if err != nil {
+		return nil, err
+	}
+	publishEntries := make([]treeEntryRequest, 0, len(uploadEntries)*2+1)
+	if attrChange, err := lfsAttributesChange(ctx, client, owner, repo, token, index, lfsPaths); err != nil {
+		return nil, err
+	} else if attrChange != nil {
+		content, err := attrChange.Source.bytes()
+		if err != nil {
+			return nil, err
+		}
+		sha, err := createBlob(ctx, client, owner, repo, token, content)
+		if err != nil {
+			return nil, err
+		}
+		publishEntries = append(publishEntries, treeEntryRequest{Path: attrChange.Path, Mode: attrChange.Mode, Type: "blob", SHA: &sha})
+	}
+	for _, e := range uploadEntries {
+		tempPath := repopath.Join(tempRoot, e.repoPath)
+		staged, ok := stagedIndex[tempPath]
+		if !ok {
+			return nil, fmt.Errorf("临时上传文件缺失：%s", tempPath)
+		}
+		mode := "100644"
+		if existing, ok := index[e.repoPath]; ok && existing.Mode != "" {
+			mode = existing.Mode
+		}
+		sha := staged.SHA
+		publishEntries = append(publishEntries,
+			treeEntryRequest{Path: e.repoPath, Mode: mode, Type: "blob", SHA: &sha},
+			treeEntryRequest{Path: tempPath, Mode: "100644", Type: "blob", SHA: nil},
+		)
+	}
+	if err := commitTree(publishEntries, summary, "发布上传内容"); err != nil {
+		return nil, err
+	}
+
+	emit(done, total, "完成")
+	return &CommitResult{SHA: lastSHA, Message: summary, Changes: len(uploadEntries), Commits: commits}, nil
 }
 
 // readLocalFile reads an upload candidate from disk.

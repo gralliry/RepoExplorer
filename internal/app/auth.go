@@ -32,18 +32,43 @@ const (
 //	wails build -ldflags "-X main.defaultClientID=Ov23li..."
 var defaultClientID = "Ov23li65G34wRLNaxbvB"
 
+// GitAccount is one saved credential profile.
+type GitAccount struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`     // "github" | "git"
+	AuthType string `json:"authType"` // "oauth" | "token"
+	Host     string `json:"host"`
+	Token    string `json:"token"`
+	Login    string `json:"login"`
+}
+
 // authConfig is persisted to %APPDATA%\RepoExplorer\auth.json
 type authConfig struct {
-	Token       string `json:"token"`
-	TokenSource string `json:"tokenSource"` // "oauth" | "manual"
-	Login       string `json:"login"`
+	Token       string       `json:"token,omitempty"`
+	TokenSource string       `json:"tokenSource,omitempty"`
+	Login       string       `json:"login,omitempty"`
+	ActiveID    string       `json:"activeId"`
+	Accounts    []GitAccount `json:"accounts"`
 }
 
 // AuthInfo is the authentication state the UI renders.
 type AuthInfo struct {
-	LoggedIn bool   `json:"loggedIn"`
+	LoggedIn bool          `json:"loggedIn"`
+	Login    string        `json:"login"`
+	Source   string        `json:"source"`
+	ActiveID string        `json:"activeId"`
+	Accounts []AccountInfo `json:"accounts"`
+}
+
+// AccountInfo is the non-secret account data sent to the UI.
+type AccountInfo struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	AuthType string `json:"authType"`
+	Host     string `json:"host"`
 	Login    string `json:"login"`
-	Source   string `json:"source"`
 }
 
 // LoginCode carries the device-flow code the user has to type in the browser.
@@ -70,6 +95,86 @@ func authConfigPath() string {
 	return filepath.Join(base, "RepoExplorer", "auth.json")
 }
 
+func accountID(kind, host, authType, name string) string {
+	base := strings.ToLower(strings.TrimSpace(kind + "-" + host + "-" + authType + "-" + name))
+	base = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			return r
+		default:
+			return '-'
+		}
+	}, base)
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = fmt.Sprintf("account-%d", time.Now().UnixNano())
+	}
+	return base
+}
+
+func accountPublic(acct GitAccount) AccountInfo {
+	return AccountInfo{ID: acct.ID, Name: acct.Name, Kind: acct.Kind, AuthType: acct.AuthType, Host: acct.Host, Login: acct.Login}
+}
+
+func (a *App) migrateAuthLocked() {
+	if len(a.auth.Accounts) == 0 && strings.TrimSpace(a.auth.Token) != "" {
+		source := a.auth.TokenSource
+		if source == "" || source == "manual" {
+			source = "token"
+		}
+		name := "GitHub"
+		if a.auth.Login != "" {
+			name = "GitHub @" + a.auth.Login
+		} else if source == "token" || source == "manual" {
+			name = "GitHub Token"
+		}
+		acct := GitAccount{ID: accountID("github", "github.com", source, name), Name: name, Kind: "github", AuthType: source, Host: "github.com", Token: strings.TrimSpace(a.auth.Token), Login: a.auth.Login}
+		a.auth.Accounts = append(a.auth.Accounts, acct)
+		a.auth.ActiveID = acct.ID
+	}
+	if a.auth.ActiveID == "" && len(a.auth.Accounts) > 0 {
+		a.auth.ActiveID = a.auth.Accounts[0].ID
+	}
+}
+
+func (a *App) activeAccountLocked() *GitAccount {
+	if a.auth.ActiveID == "" && len(a.auth.Accounts) > 0 {
+		a.auth.ActiveID = a.auth.Accounts[0].ID
+	}
+	for i := range a.auth.Accounts {
+		if a.auth.Accounts[i].ID == a.auth.ActiveID {
+			return &a.auth.Accounts[i]
+		}
+	}
+	return nil
+}
+
+func (a *App) upsertAccountLocked(acct GitAccount) {
+	if acct.ID == "" {
+		acct.ID = accountID(acct.Kind, acct.Host, acct.AuthType, acct.Name)
+	}
+	for i := range a.auth.Accounts {
+		if a.auth.Accounts[i].ID == acct.ID {
+			a.auth.Accounts[i] = acct
+			a.auth.ActiveID = acct.ID
+			return
+		}
+	}
+	a.auth.Accounts = append(a.auth.Accounts, acct)
+	a.auth.ActiveID = acct.ID
+}
+
+func normalizeHost(host string) string {
+	host = strings.TrimSpace(strings.ToLower(host))
+	host = strings.TrimPrefix(host, "https://")
+	host = strings.TrimPrefix(host, "http://")
+	host = strings.TrimPrefix(host, "ssh://")
+	if i := strings.IndexAny(host, "/:"); i >= 0 {
+		host = host[:i]
+	}
+	return host
+}
+
 func (a *App) loadAuth() {
 	data, err := os.ReadFile(authConfigPath())
 	if err != nil {
@@ -81,6 +186,7 @@ func (a *App) loadAuth() {
 	}
 	a.authMu.Lock()
 	a.auth = cfg
+	a.migrateAuthLocked()
 	a.authMu.Unlock()
 }
 
@@ -104,7 +210,12 @@ func (a *App) saveAuthLocked() error {
 func (a *App) effectiveToken() string {
 	a.authMu.Lock()
 	defer a.authMu.Unlock()
-	return strings.TrimSpace(a.auth.Token)
+	a.migrateAuthLocked()
+	acct := a.activeAccountLocked()
+	if acct != nil && acct.Kind == "github" {
+		return strings.TrimSpace(acct.Token)
+	}
+	return ""
 }
 
 /* ------------------------------------------------------------ bound methods */
@@ -113,16 +224,17 @@ func (a *App) effectiveToken() string {
 func (a *App) GetAuth() AuthInfo {
 	a.authMu.Lock()
 	defer a.authMu.Unlock()
+	a.migrateAuthLocked()
 
-	source := a.auth.TokenSource
-	if source == "" && a.auth.Token != "" {
-		source = "manual"
+	accounts := make([]AccountInfo, 0, len(a.auth.Accounts))
+	for _, acct := range a.auth.Accounts {
+		accounts = append(accounts, accountPublic(acct))
 	}
-	return AuthInfo{
-		LoggedIn: a.auth.Token != "",
-		Login:    a.auth.Login,
-		Source:   source,
+	acct := a.activeAccountLocked()
+	if acct == nil {
+		return AuthInfo{Accounts: accounts}
 	}
+	return AuthInfo{LoggedIn: acct.Kind == "github" && acct.Token != "", Login: acct.Login, Source: acct.AuthType, ActiveID: acct.ID, Accounts: accounts}
 }
 
 // SaveManualToken stores a personal access token as an alternative to logging in.
@@ -131,18 +243,79 @@ func (a *App) SaveManualToken(token string) error {
 	if token == "" {
 		return fmt.Errorf("Token 不能为空")
 	}
+	authType := "manual"
+	login := ""
+	name := "GitHub Token"
+	if fetched := fetchLogin(context.Background(), newHTTPClient(30*time.Second), token); fetched != "" {
+		login = fetched
+		name = "GitHub @" + fetched
+	}
 	a.authMu.Lock()
 	defer a.authMu.Unlock()
-	a.auth.Token = token
-	a.auth.TokenSource = "manual"
-	a.auth.Login = ""
+	a.migrateAuthLocked()
+	a.upsertAccountLocked(GitAccount{ID: accountID("github", "github.com", authType, name), Name: name, Kind: "github", AuthType: authType, Host: "github.com", Token: token, Login: login})
 	return a.saveAuthLocked()
 }
 
-// ClearAuth forgets the stored token (keeps the client id).
+// SaveGitToken stores a token for a non-GitHub Git host.
+func (a *App) SaveGitToken(name, host, token string) error {
+	token = strings.TrimSpace(token)
+	host = normalizeHost(host)
+	name = strings.TrimSpace(name)
+	if host == "" {
+		return fmt.Errorf("Git 网址不能为空")
+	}
+	if token == "" {
+		return fmt.Errorf("Access Token 不能为空")
+	}
+	if name == "" {
+		name = host + " Token"
+	}
+	a.authMu.Lock()
+	defer a.authMu.Unlock()
+	a.migrateAuthLocked()
+	a.upsertAccountLocked(GitAccount{ID: accountID("git", host, "token", name), Name: name, Kind: "git", AuthType: "token", Host: host, Token: token})
+	return a.saveAuthLocked()
+}
+
+func (a *App) SetActiveAccount(id string) error {
+	a.authMu.Lock()
+	defer a.authMu.Unlock()
+	a.migrateAuthLocked()
+	if strings.TrimSpace(id) == "" {
+		a.auth.ActiveID = ""
+		return a.saveAuthLocked()
+	}
+	for _, acct := range a.auth.Accounts {
+		if acct.ID == id {
+			a.auth.ActiveID = id
+			return a.saveAuthLocked()
+		}
+	}
+	return fmt.Errorf("账号不存在")
+}
+
+// ClearAuth forgets the active account.
 func (a *App) ClearAuth() error {
 	a.authMu.Lock()
 	defer a.authMu.Unlock()
+	a.migrateAuthLocked()
+	active := a.auth.ActiveID
+	if active == "" {
+		a.auth.Accounts = nil
+		return a.saveAuthLocked()
+	}
+	kept := a.auth.Accounts[:0]
+	for _, acct := range a.auth.Accounts {
+		if acct.ID != active {
+			kept = append(kept, acct)
+		}
+	}
+	a.auth.Accounts = kept
+	a.auth.ActiveID = ""
+	if len(a.auth.Accounts) > 0 {
+		a.auth.ActiveID = a.auth.Accounts[0].ID
+	}
 	a.auth.Token = ""
 	a.auth.TokenSource = ""
 	a.auth.Login = ""
@@ -321,10 +494,13 @@ func (a *App) runDeviceFlow(ctx context.Context, clientID string) {
 
 		if resp.AccessToken != "" {
 			login := fetchLogin(ctx, client, resp.AccessToken)
+			name := "GitHub OAuth"
+			if login != "" {
+				name = "GitHub @" + login
+			}
 			a.authMu.Lock()
-			a.auth.Token = resp.AccessToken
-			a.auth.TokenSource = "oauth"
-			a.auth.Login = login
+			a.migrateAuthLocked()
+			a.upsertAccountLocked(GitAccount{ID: accountID("github", "github.com", "oauth", name), Name: name, Kind: "github", AuthType: "oauth", Host: "github.com", Token: resp.AccessToken, Login: login})
 			saveErr := a.saveAuthLocked()
 			a.authMu.Unlock()
 

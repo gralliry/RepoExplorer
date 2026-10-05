@@ -11,7 +11,6 @@ const api = () => window.go.main.App;
 const rt = () => window.runtime;
 
 const $ = (id) => document.getElementById(id);
-const repoNameEl = $('repo-name');
 const refEl = $('ref');
 const loadBtn = $('load');
 const filterEl = $('filter');
@@ -66,7 +65,7 @@ function fmtSize(n) {
 function basename(p) { const i = p.lastIndexOf('/'); return i >= 0 ? p.slice(i + 1) : p; }
 function dirname(p) { const i = p.lastIndexOf('/'); return i >= 0 ? p.slice(0, i) : ''; }
 const joinPath = (dir, name) => (dir ? `${dir}/${name}` : name);
-const repoId = () => (info ? `${info.owner}/${info.repo}` : '');
+const repoId = () => (info ? currentRepo : '');
 
 function fileType(name) {
     const i = name.lastIndexOf('.');
@@ -238,9 +237,6 @@ function openContextMenu(event, entries) {
 
     if (!entries.length) {
         items.push(
-            { label: '新建文件…', run: () => promptNewFile(currentPath), disabled: ro },
-            { label: '新建文件夹…', run: () => promptNewFolder(currentPath), disabled: ro },
-            '-',
             { label: '上传文件…', run: () => uploadInto(currentPath, 'files'), disabled: ro },
             { label: '上传文件夹…', run: () => uploadInto(currentPath, 'folder'), disabled: ro },
         );
@@ -258,8 +254,6 @@ function openContextMenu(event, entries) {
             items.push(
                 { label: '打开', run: () => navigate(single.path) },
                 '-',
-                { label: '在此新建文件…', run: () => promptNewFile(single.path), disabled: ro },
-                { label: '在此新建文件夹…', run: () => promptNewFolder(single.path), disabled: ro },
                 { label: '上传到此…', run: () => uploadInto(single.path, 'files'), disabled: ro },
                 '-',
             );
@@ -294,8 +288,33 @@ async function refreshAuth() {
     renderAuthArea();
 }
 
+function accountLabel(acct) {
+    if (!acct) return '不使用账号 / 本机 Git 凭据';
+    const kind = acct.kind === 'github' ? 'GitHub' : acct.host;
+    const who = acct.login ? `@${acct.login}` : acct.name;
+    return `${kind} · ${who}`;
+}
+
+function renderAccountSelect() {
+    const select = $('account-select');
+    if (!select) return;
+    const accounts = auth.accounts || [];
+    select.innerHTML = '<option value="">不使用账号 / 本机 Git 凭据</option>';
+    for (const acct of accounts) {
+        const opt = document.createElement('option');
+        opt.value = acct.id;
+        opt.textContent = accountLabel(acct);
+        select.appendChild(opt);
+    }
+    select.value = auth.activeId || '';
+}
+
 function renderAuthArea() {
-    const loggedIn = !!auth.loggedIn;
+    const accounts = auth.accounts || [];
+    const active = accounts.find((a) => a.id === auth.activeId) || null;
+    const loggedIn = !!(active && active.kind === 'github');
+
+    renderAccountSelect();
 
     // inside the "open repository" dialog
     $('auth-box').classList.toggle('hidden', loggedIn);
@@ -303,20 +322,29 @@ function renderAuthArea() {
     $('myrepo-refresh').classList.toggle('hidden', !loggedIn);
 
     // inside the settings dialog
-    $('account-in').classList.toggle('hidden', !loggedIn);
-    $('account-out').classList.toggle('hidden', loggedIn);
-    $('account-state').textContent = loggedIn ? '' : '未登录';
-    if (loggedIn) {
-        $('account-name').textContent = auth.source === 'oauth' ? `@${auth.login || '(未知用户)'}` : '手动 Token';
-        $('account-source').textContent = auth.source === 'oauth'
-            ? '已通过 GitHub OAuth 登录，凭据已保存到本地'
-            : '正在使用手动填写的 Personal Access Token';
+    $('account-in').classList.toggle('hidden', !active);
+    $('account-empty').classList.toggle('hidden', !!active);
+    $('account-state').textContent = active ? `当前：${accountLabel(active)}` : '未选择账号';
+    if (active) {
+        $('account-name').textContent = accountLabel(active);
+        $('account-source').textContent = active.kind === 'github'
+            ? (active.authType === 'oauth' ? 'GitHub OAuth 账号' : 'GitHub Token 账号')
+            : `${active.host} Access Token`;
     } else {
         showAuthView('setup');
     }
 
     renderMyRepoState();
     renderSettingsPaths();
+}
+
+function openAccountModal(method = 'github') {
+    openModal('account-modal');
+    selectAuthMethod(method);
+}
+
+function closeAccountModal() {
+    closeModal('account-modal');
 }
 
 async function finishLoginFromSavedAuth(message) {
@@ -326,6 +354,7 @@ async function finishLoginFromSavedAuth(message) {
     renderMyRepos();
     await refreshMyRepos();
     toast(message || `已登录 GitHub：${auth.source === 'oauth' ? '@' + (auth.login || '(未知用户)') : '手动 Token'}`);
+    closeAccountModal();
 }
 
 function stopDeviceFlowWatch() {
@@ -354,12 +383,13 @@ function renderMyRepoState() {
     const refresh = $('myrepo-refresh');
     refresh.disabled = myReposLoading;
     refresh.textContent = myReposLoading ? '刷新中…' : '刷新';
-    if (!auth.loggedIn) {
-        state.textContent = '未登录';
+    const accounts = auth.accounts || [];
+    const active = accounts.find((a) => a.id === auth.activeId) || null;
+    if (!active || active.kind !== 'github') {
+        state.textContent = '未选择 GitHub 账号';
         return;
     }
-    const who = auth.source === 'oauth' ? `@${auth.login || '(未知用户)'}` : '手动 Token';
-    let text = `已登录 ${who}`;
+    let text = `已选择 ${accountLabel(active)}`;
     if (myReposLoading) text += ' · 加载中…';
     else if (myReposError) text += ' · 加载失败';
     else if (myReposLoaded) text += ` · ${myRepos.length} 个`;
@@ -373,14 +403,14 @@ function showAuthView(name) {
 }
 
 function selectAuthMethod(method) {
-    const token = method === 'token';
-    $('auth-tab-github').classList.toggle('active', !token);
-    $('auth-tab-token').classList.toggle('active', token);
-    $('auth-tab-github').setAttribute('aria-selected', String(!token));
-    $('auth-tab-token').setAttribute('aria-selected', String(token));
-    $('auth-method-github').classList.toggle('hidden', token);
-    $('auth-method-token').classList.toggle('hidden', !token);
-    if (token) $('auth-token').focus();
+    for (const name of ['github', 'token', 'git-token']) {
+        const active = method === name;
+        $('auth-tab-' + name).classList.toggle('active', active);
+        $('auth-tab-' + name).setAttribute('aria-selected', String(active));
+        $('auth-method-' + name).classList.toggle('hidden', !active);
+    }
+    if (method === 'token') $('auth-token').focus();
+    if (method === 'git-token') $('git-account-host').focus();
 }
 
 function openExternal(url) {
@@ -424,7 +454,8 @@ function requireWrite() {
         toast('这个仓库你没有写权限，只能下载', true);
         return false;
     }
-    return requireLogin();
+    if (info.provider === 'github') return requireLogin();
+    return true;
 }
 
 /* ------------------------------------------------------------ repo model */
@@ -775,11 +806,9 @@ function startPathEdit() {
 /* --------------------------------------------------------------- status */
 function updateWriteControls() {
     const ro = !canWrite();
-    for (const id of ['new-menu', 'upload-menu']) {
-        const btn = $(id);
-        btn.disabled = ro;
-        btn.title = ro ? '只读仓库，只能下载' : (id === 'new-menu' ? '新建' : '上传');
-    }
+    const uploadBtn = $('upload-menu');
+    uploadBtn.disabled = ro;
+    uploadBtn.title = ro ? '只读仓库，只能下载' : '上传';
     $('select-all').disabled = !info || !currentEntries.length;
     $('select-all').textContent = selectionMode ? '取消' : '选择';
     $('select-all').title = selectionMode ? '退出选择模式' : '进入选择模式';
@@ -848,8 +877,6 @@ async function load() {
         const tree = await api().FetchRepoTree(repo, refEl.value || '');
         setProgress(2, 3, '构建文件列表…');
         info = tree;
-        currentRepo = `${tree.owner}/${tree.repo}`;
-        repoNameEl.textContent = currentRepo;
 
         const branches = tree.branches && tree.branches.length ? tree.branches : [tree.default_branch];
         refEl.innerHTML = '';
@@ -914,7 +941,8 @@ async function runMutation(label, fn) {
         setProgress(1, 2, '重新拉取仓库列表…');
         await refreshTree();
         setProgress(2, 2, '完成');
-        toast(`已提交：${result.message}`);
+        const commitNote = result.commits && result.commits > 1 ? `（${result.commits} 个提交）` : '';
+        toast(`已提交${commitNote}：${result.message}`);
         return true;
     } catch (err) {
         toast(errText(err), true);
@@ -1105,47 +1133,6 @@ function confirmDeleteEntries(entries) {
     return confirmDeletePaths([...files]);
 }
 
-async function promptNewFile(dir) {
-    const answer = await promptModal({
-        title: '新建文件',
-        label: '文件路径',
-        hint: dir ? `将创建在 ${dir}/` : '将创建在仓库根目录',
-        value: dir ? `${dir}/` : '',
-        extra: { label: '文件内容（可留空）', value: '' },
-        okText: '创建',
-    });
-    if (!answer) return;
-    const target = answer.value.replace(/^\/+/, '');
-    if (!target) return toast('路径不能为空', true);
-    await runMutation('正在创建…', () => api().SaveFile(repoId(), info.git_ref, target, answer.extra, ''));
-}
-
-async function promptNewFolder(dir) {
-    const folder = await promptModal({
-        title: '新建文件夹',
-        label: '文件夹路径',
-        hint: 'Git 无法保存空文件夹，所以需要同时创建里面的第一个文件。',
-        value: dir ? `${dir}/` : '',
-        okText: '下一步',
-    });
-    if (!folder) return;
-    const folderPath = folder.replace(/^\/+|\/+$/g, '');
-    if (!folderPath) return toast('路径不能为空', true);
-
-    const file = await promptModal({
-        title: '第一个文件',
-        label: '文件名',
-        hint: `将创建在 ${folderPath}/`,
-        extra: { label: '文件内容（可留空）', value: '' },
-        okText: '创建',
-    });
-    if (!file) return;
-    if (file.value.includes('/')) return toast('文件名不能包含 /', true);
-
-    const target = `${folderPath}/${file.value}`;
-    await runMutation('正在创建…', () => api().SaveFile(repoId(), info.git_ref, target, file.extra, ''));
-}
-
 async function promptMove(entries) {
     const answer = await promptModal({
         title: '移动到',
@@ -1241,9 +1228,15 @@ async function uploadInto(dir, kind) {
     }
     setProgress(0, 0);
 
+    const uploadNote = items.length > 100
+        ? `会先分批暂存到临时目录，全部成功后再一次性发布到 ${dir || '仓库根目录'}。`
+        : `将在当前分支上产生 1 个提交。`;
+    const lfsNote = items.some((it) => it.size > 50 * 1024 * 1024)
+        ? ' 超过 50 MiB 的文件会自动使用 Git LFS。'
+        : '';
     const ok = await confirmModal({
         title: '上传',
-        message: `将向 ${dir || '仓库根目录'} 上传 ${items.length} 个文件（1 个提交）：`,
+        message: `将上传 ${items.length} 个文件。${uploadNote}${lfsNote}`,
         items: items.map((it) => ({ text: `${it.path}   ${fmtSize(it.size)}`, cls: 'add' })),
         okText: '确认上传',
     });
@@ -1341,7 +1334,6 @@ function openRepo(fullName) {
     const name = (fullName || '').trim();
     if (!name) return toast('请输入仓库地址', true);
     currentRepo = name;
-    repoNameEl.textContent = name;
     closeModal('open-modal');
     load();
 }
@@ -1519,14 +1511,6 @@ crumbEl.onmousedown = (e) => {
     if (e.target === crumbEl) startPathEdit();
 };
 
-$('new-menu').onclick = (e) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    showCtxMenu(r.left, r.bottom + 4, [
-        { label: '新建文件…', run: () => promptNewFile(currentPath) },
-        { label: '新建文件夹…', run: () => promptNewFolder(currentPath) },
-    ]);
-};
-
 $('upload-menu').onclick = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
     showCtxMenu(r.left, r.bottom + 4, [
@@ -1570,6 +1554,7 @@ document.addEventListener('keydown', (e) => {
         hideCtxMenu();
         closeModal('prompt-modal');
         closeModal('confirm-modal');
+        closeModal('account-modal');
         if (typing) e.target.blur();
         return;
     }
@@ -1597,6 +1582,24 @@ refEl.onchange = () => { if (info) load(); };
 /* ------------------------------------------------------------- auth wiring */
 $('auth-tab-github').onclick = () => selectAuthMethod('github');
 $('auth-tab-token').onclick = () => selectAuthMethod('token');
+$('auth-tab-git-token').onclick = () => selectAuthMethod('git-token');
+
+$('account-select').onchange = async (e) => {
+    try {
+        await api().SetActiveAccount(e.target.value || '');
+        myReposLoaded = false;
+        await refreshAuth();
+        renderMyRepos();
+        await refreshMyRepos();
+    } catch (err) {
+        toast(errText(err), true);
+    }
+};
+
+$('account-add').onclick = () => openAccountModal('github');
+$('settings-account-add').onclick = () => openAccountModal('github');
+$('settings-account-add-empty').onclick = () => openAccountModal('github');
+$('account-close').onclick = closeAccountModal;
 
 $('auth-start').onclick = async () => {
     try {
@@ -1637,7 +1640,27 @@ $('auth-save-token').onclick = async () => {
         await refreshAuth();
         renderMyRepos();
         await refreshMyRepos();
+        closeAccountModal();
         toast('Token 已保存');
+    } catch (err) {
+        toast(errText(err), true);
+    }
+};
+
+$('git-account-save').onclick = async () => {
+    const name = $('git-account-name').value.trim();
+    const host = $('git-account-host').value.trim();
+    const token = $('git-account-token').value.trim();
+    if (!host) return toast('请填写 Git 网址', true);
+    if (!token) return toast('请填写 Access Token', true);
+    try {
+        await api().SaveGitToken(name, host, token);
+        $('git-account-name').value = '';
+        $('git-account-host').value = '';
+        $('git-account-token').value = '';
+        await refreshAuth();
+        closeAccountModal();
+        toast('Git 账号已保存');
     } catch (err) {
         toast(errText(err), true);
     }
@@ -1651,7 +1674,7 @@ $('auth-logout').onclick = async () => {
         myReposError = '';
         await refreshAuth();
         renderMyRepos();
-        toast('已清除本地凭据');
+        toast('已删除当前账号');
     } catch (err) {
         toast(errText(err), true);
     }
@@ -1667,7 +1690,7 @@ function registerLoginEvents(attempt = 0) {
         deviceFlow = code;
         $('auth-user-code').textContent = code.userCode;
         $('auth-code-status').textContent = `等待你在浏览器中授权…（验证码 ${code.expiresIn} 秒内有效）`;
-        openModal('open-modal');
+        openModal('account-modal');
         renderAuthArea();
         showAuthView('code');
     });

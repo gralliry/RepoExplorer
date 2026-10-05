@@ -20,6 +20,13 @@ import (
 // maxEditableSize caps what the built-in editor will open.
 const maxEditableSize = 2 << 20 // 2 MiB
 
+// Large uploads are split so GitHub does not reject one oversized tree update.
+const maxUploadFilesPerCommit = 100
+
+// GitHub warns at 50 MiB and rejects regular Git blobs at 100 MiB. Files above
+// this conservative threshold are uploaded as Git LFS objects automatically.
+const maxDirectGitBlobSize = 50 << 20
+
 // PathMove is one source -> destination pair for rename / move.
 type PathMove struct {
 	From string `json:"from"`
@@ -30,6 +37,12 @@ type PathMove struct {
 type UploadItem struct {
 	Path string `json:"path"`
 	Size int64  `json:"size"`
+}
+
+type uploadEntry struct {
+	repoPath string
+	local    string
+	size     int64
 }
 
 // FileContent is what the editor receives.
@@ -50,16 +63,18 @@ func localFilePairs(repoDir string, localPaths []string) ([]UploadItem, []string
 		return nil, nil, err
 	}
 
-	items := make([]UploadItem, 0, len(localPaths))
-	locals := make([]string, 0, len(localPaths))
+	type pair struct {
+		item  UploadItem
+		local string
+	}
+	pairs := make([]pair, 0, len(localPaths))
 
 	addFile := func(local, rel string) error {
 		info, err := os.Stat(local)
 		if err != nil {
 			return fmt.Errorf("读取本地文件失败 %s：%w", local, err)
 		}
-		items = append(items, UploadItem{Path: repopath.Join(base, rel), Size: info.Size()})
-		locals = append(locals, local)
+		pairs = append(pairs, pair{item: UploadItem{Path: repopath.Join(base, rel), Size: info.Size()}, local: local})
 		return nil
 	}
 
@@ -99,7 +114,13 @@ func localFilePairs(repoDir string, localPaths []string) ([]UploadItem, []string
 		}
 	}
 
-	sort.Slice(items, func(i, j int) bool { return items[i].Path < items[j].Path })
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].item.Path < pairs[j].item.Path })
+	items := make([]UploadItem, len(pairs))
+	locals := make([]string, len(pairs))
+	for i, p := range pairs {
+		items[i] = p.item
+		locals[i] = p.local
+	}
 	return items, locals, nil
 }
 
@@ -439,8 +460,31 @@ func (a *App) PlanUpload(repoDir string, localPaths []string) ([]UploadItem, err
 	return items, nil
 }
 
-// UploadFiles writes local files (or whole folders) into the repository as one
-// atomic commit.
+func uploadMessage(entries []uploadEntry, index map[string]remoteEntry, message string) string {
+	if strings.TrimSpace(message) != "" {
+		return message
+	}
+	added := 0
+	for _, e := range entries {
+		if _, exists := index[e.repoPath]; !exists {
+			added++
+		}
+	}
+	if len(entries) == 1 {
+		if added == 1 {
+			return "Add " + entries[0].repoPath
+		}
+		return "Update " + entries[0].repoPath
+	}
+	if added == len(entries) {
+		return fmt.Sprintf("Add %d files", len(entries))
+	}
+	return fmt.Sprintf("Update %d files", len(entries))
+}
+
+// UploadFiles writes local files (or whole folders) into the repository. Small
+// uploads are one atomic commit; large uploads are staged in a temporary
+// directory in batches, then published to the destination paths in one commit.
 func (githubProvider) UploadFiles(a *App, repo, branch, repoDir string, localPaths []string, message string) (*CommitResult, error) {
 	owner, name, err := githubutil.ParseRepo(repo)
 	if err != nil {
@@ -455,21 +499,24 @@ func (githubProvider) UploadFiles(a *App, repo, branch, repoDir string, localPat
 		return nil, fmt.Errorf("没有可上传的文件")
 	}
 
-	type entry struct {
-		repoPath string
-		local    string
-	}
-	entries := make([]entry, len(items))
+	entries := make([]uploadEntry, len(items))
 	for i := range items {
-		entries[i] = entry{repoPath: items[i].Path, local: locals[i]}
+		entries[i] = uploadEntry{repoPath: items[i].Path, local: locals[i], size: items[i].Size}
+	}
+	if len(entries) > maxUploadFilesPerCommit {
+		return a.commitStagedUpload(owner, name, branch, entries, message)
 	}
 
 	plan := func(index map[string]remoteEntry) ([]treeChange, error) {
-		changes := make([]treeChange, 0, len(entries))
+		changes := make([]treeChange, 0, len(entries)+1)
+		var lfsPaths []string
 		for _, e := range entries {
 			mode := "100644"
 			if existing, ok := index[e.repoPath]; ok && existing.Mode != "" {
 				mode = existing.Mode
+			}
+			if e.size > maxDirectGitBlobSize {
+				lfsPaths = append(lfsPaths, e.repoPath)
 			}
 			changes = append(changes, treeChange{
 				Path:   e.repoPath,
@@ -477,29 +524,22 @@ func (githubProvider) UploadFiles(a *App, repo, branch, repoDir string, localPat
 				Source: &contentSource{local: e.local},
 			})
 		}
+		ctx := a.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		attrChange, err := lfsAttributesChange(ctx, newHTTPClient(60*time.Second), owner, name, a.effectiveToken(), index, lfsPaths)
+		if err != nil {
+			return nil, err
+		}
+		if attrChange != nil {
+			changes = append(changes, *attrChange)
+		}
 		return changes, nil
 	}
 
 	describe := func(index map[string]remoteEntry) string {
-		if strings.TrimSpace(message) != "" {
-			return message
-		}
-		added := 0
-		for _, e := range entries {
-			if _, exists := index[e.repoPath]; !exists {
-				added++
-			}
-		}
-		if len(entries) == 1 {
-			if added == 1 {
-				return "Add " + entries[0].repoPath
-			}
-			return "Update " + entries[0].repoPath
-		}
-		if added == len(entries) {
-			return fmt.Sprintf("Add %d files", len(entries))
-		}
-		return fmt.Sprintf("Update %d files", len(entries))
+		return uploadMessage(entries, index, message)
 	}
 
 	return a.commitChanges(owner, name, branch, describe, plan)

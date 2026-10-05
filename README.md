@@ -8,7 +8,6 @@ RepoExplorer 是一个桌面端 Git 仓库文件浏览与管理工具。它把�
 - 搜索仓库内文件
 - 下载文件或文件夹到本地
 - 上传文件或文件夹
-- 新建文件和文件夹
 - 复制、剪切、粘贴、移动、重命名、删除
 - 支持选择模式：点击“选择”后勾选多个项目再批量操作
 - 操作过程显示任务进度
@@ -20,12 +19,12 @@ RepoExplorer 是一个桌面端 Git 仓库文件浏览与管理工具。它把�
 | 类型 | 状态 |
 |---|---|
 | GitHub 公开仓库 | 支持浏览和下载 |
-| GitHub 私有仓库 | 登录后支持 |
+| GitHub 私有仓库 | GitHub 登录后支持 |
 | GitHub 写操作 | 需要登录且拥有写权限 |
-| GitLab / Gitee / 其它 Git 服务 | 暂未支持 |
-| 本地 Git 仓库 | 暂未支持 |
+| 标准 Git 远端仓库 | 支持浏览、下载和写操作，依赖本机 `git` 命令 |
+| SSH / HTTPS / 本地 Git 仓库路径 | 支持，认证交给本机 SSH agent、Git Credential Manager 或 URL 凭据 |
 
-> 输入 `owner/repo` 时默认按 GitHub 仓库处理。
+> 输入 `owner/repo` 时默认按 GitHub 仓库处理。其它服务建议输入完整 Git URL，例如 HTTPS、SSH 地址或本地仓库路径。
 
 ## 使用方法
 
@@ -34,15 +33,19 @@ RepoExplorer 是一个桌面端 Git 仓库文件浏览与管理工具。它把�
 点击 **打开仓库**，可以选择：
 
 - 从“我的仓库”列表里打开
-- 手动输入公开仓库地址
+- 手动输入 Git 仓库地址
 
-支持的 GitHub 地址格式：
+支持的仓库地址格式：
 
 ```text
 owner/repo
 https://github.com/owner/repo
-git@github.com:owner/repo.git
+https://gitlab.com/group/project.git
+ssh://git.example.com/group/project.git
+D:\\code\\some-repo
 ```
+
+GitHub 地址继续使用内置 GitHub API 和登录态。其它 Git 地址使用本机 `git` 命令克隆、提交和推送。
 
 ### 登录
 
@@ -73,9 +76,8 @@ git@github.com:owner/repo.git
 - 删除
 - 下载
 
-新建和上传在顶栏菜单中：
+上传在顶栏菜单中：
 
-- **新建 ▾**
 - **上传 ▾**
 
 上传文件夹时会保留最外层文件夹名。
@@ -99,17 +101,14 @@ git@github.com:owner/repo.git
 
 ## 权限说明
 
-未登录时只能打开公开仓库，通常只能浏览和下载。
+未登录时仍可打开公开 GitHub 仓库，以及本机 Git 可以访问的其它 Git 仓库。
 
-需要登录的操作：
+需要 GitHub 登录的操作：
 
-- 打开私有仓库
-- 上传
-- 新建
-- 重命名
-- 移动
-- 复制/剪切/粘贴
-- 删除
+- 打开 GitHub 私有仓库
+- 对 GitHub 仓库上传、重命名、移动、复制、剪切/粘贴、删除
+
+其它 Git 仓库的权限由本机 `git` 决定，例如 SSH agent、Git Credential Manager 或远端 URL 中的凭据。
 
 如果仓库没有写权限，相关按钮会被禁用。
 
@@ -120,7 +119,6 @@ git@github.com:owner/repo.git
 包括：
 
 - 上传文件或文件夹
-- 新建文件或文件夹
 - 重命名
 - 移动
 - 复制
@@ -129,7 +127,6 @@ git@github.com:owner/repo.git
 
 请注意：
 
-- Git 不支持真正的空文件夹，所以新建文件夹时需要同时创建里面的第一个文件
 - 删除是真实删除，但可以从 Git 历史中找回
 - 如果操作时分支被别人更新，可能会提示冲突；刷新仓库后重试即可
 

@@ -28,6 +28,7 @@ type FileEntry struct {
 type RepoTree struct {
 	Owner         string      `json:"owner"`
 	Repo          string      `json:"repo"`
+	Provider      string      `json:"provider"`
 	GitRef        string      `json:"git_ref"`
 	DefaultBranch string      `json:"default_branch"`
 	Branches      []string    `json:"branches"`
@@ -190,6 +191,7 @@ func (githubProvider) FetchRepoTree(a *App, repo string, gitRef string) (*RepoTr
 	return &RepoTree{
 		Owner:         owner,
 		Repo:          name,
+		Provider:      "github",
 		GitRef:        chosen,
 		DefaultBranch: defaultBranch,
 		Branches:      names,

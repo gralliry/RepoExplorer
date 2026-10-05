@@ -24,16 +24,7 @@ body {
     overflow: hidden;
 }
 
-/* ------------------------------------------------------------- top toolbar */
-.toolbar {
-    display: flex;
-    gap: 10px;
-    align-items: flex-end;
-    padding: 10px 12px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
-}
-
+/* ------------------------------------------------------------- controls */
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field.grow { flex: 1; min-width: 0; }
 .field.auth-field { min-width: 116px; }
@@ -66,8 +57,6 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
 .danger-text { color: var(--danger); }
 .danger-text:hover:not(:disabled) { background: #ffe8e8; border-color: var(--danger); }
 
-.toolbar button { flex: none; white-space: nowrap; }
-
 /* ---------------------------------------------------------- address bar */
 .navbar {
     display: flex;
@@ -76,6 +65,25 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
     padding: 8px 12px;
     background: var(--panel);
     border-bottom: 1px solid var(--border);
+}
+.pathbar {
+    gap: 8px;
+    padding-bottom: 6px;
+}
+.actionbar {
+    flex-wrap: wrap;
+    align-items: flex-end;
+    padding-top: 6px;
+}
+.repo-actions {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    margin-left: auto;
+}
+.branch-field {
+    width: 180px;
+    justify-content: flex-end;
 }
 
 .nav-btn {
@@ -124,9 +132,9 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
 }
 .breadcrumb input:focus { box-shadow: none; }
 
-.nav-search { flex: none; width: 210px; }
+.nav-search { flex: 0 0 min(320px, 34vw); min-width: 180px; }
 .navbar button { flex: none; white-space: nowrap; }
-#new-menu, #upload-menu { min-width: 74px; }
+#upload-menu { min-width: 74px; }
 
 /* --------------------------------------------------------------- content */
 .content {
@@ -232,25 +240,6 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
 .status-progress .bar > i { display: block; height: 100%; width: 0; background: var(--accent); }
 
 /* ------------------------------------------------------------- repo picker */
-.repo-display {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 6px 9px;
-    color: var(--text);
-    background: #f7f8fa;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-}
-.repo-display > #repo-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 .modal.open-modal { width: 560px; }
 .open-section { display: flex; flex-direction: column; gap: 8px; }
 .open-title { display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 600; }
@@ -368,7 +357,7 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
 
 .auth-tabs {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 4px;
     padding: 4px;
     background: #f2f4f8;
@@ -474,6 +463,7 @@ button.danger:hover:not(:disabled) { background: #c92a2a; }
 /* ----------------------------------------------------------------- toast */
 .toast {
     position: fixed;
+    z-index: 120;
     left: 50%;
     bottom: 40px;
     display: flex;

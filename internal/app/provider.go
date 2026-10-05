@@ -19,7 +19,7 @@ type gitProvider interface {
 	UploadFiles(a *App, repo, branch, repoDir string, localPaths []string, message string) (*CommitResult, error)
 }
 
-var gitProviders = []gitProvider{githubProvider{}}
+var gitProviders = []gitProvider{githubProvider{}, genericGitProvider{}}
 
 func (a *App) providerForRepo(repo string) (gitProvider, error) {
 	for _, p := range gitProviders {
