@@ -42,12 +42,12 @@ jobs:
                       archive: tar.gz
                       binary: RepoExplorer
                     - name: macos-amd64
-                      os: macos-13
+                      os: macos-15-intel
                       platform: darwin/amd64
                       archive: zip
                       app: RepoExplorer.app
                     - name: macos-arm64
-                      os: macos-14
+                      os: macos-15
                       platform: darwin/arm64
                       archive: zip
                       app: RepoExplorer.app
@@ -59,6 +59,8 @@ jobs:
         steps:
             - name: Checkout
               uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
 
             - name: Set up Go
               uses: actions/setup-go@v5
